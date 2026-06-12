@@ -26,11 +26,12 @@ const PINNED_COUNT = 5;
 const GAP_WINDOW = 3;
 
 // ── Palette ─────────────────────────────────────────────────────────────────
-const BG       = "\x1b[48;5;235m";  // panel background
-const BG_SEL   = "\x1b[48;5;237m";  // selected row
-const BG_HDR   = "\x1b[48;5;234m";  // header (slightly darker)
-const BG_CARD  = "\x1b[48;5;236m";  // subtle info cards
+const BG       = "\x1b[48;5;232m";  // panel background, very dark
+const BG_SEL   = "\x1b[48;5;235m";  // selected row
+const BG_HDR   = "\x1b[48;5;233m";  // header surface
+const BG_CARD  = "\x1b[48;5;234m";  // subtle info dock surface
 
+const FG_FAINT = "\x1b[38;5;240m";
 const FG_DIM   = "\x1b[38;5;243m";
 const FG_MID   = "\x1b[38;5;248m";
 const FG_NORM  = "\x1b[38;5;250m";
@@ -40,7 +41,7 @@ const FG_INFO  = "\x1b[38;5;80m";   // cyan/info
 const FG_OK    = "\x1b[38;5;114m";  // green/safe
 const FG_WARN  = "\x1b[38;5;215m";  // amber/warning
 const FG_ERR   = "\x1b[38;5;203m";  // red/error
-const FG_TIME  = "\x1b[38;5;245m";
+const FG_TIME  = "\x1b[38;5;242m";
 const FG_EXP   = "\x1b[38;5;252m";  // expanded text
 const FG_DOT   = FG_OK;              // focused indicator
 
@@ -339,8 +340,8 @@ class SidebarComponent {
     const w = Math.min(SIDEBAR_WIDTH, width);
     const lines: string[] = [];
 
-    // Borderless internal padding. No left border/accent bar.
-    const pad = "   ";
+    // Borderless internal padding. Keep inset tight; content is the structure.
+    const pad = " ";
     const barPad = pad;
     const barSpace = pad;
 
@@ -407,7 +408,7 @@ class SidebarComponent {
       const isExp = this.expanded.has(idx);
       const bg = isSel ? BG_SEL : BG;
       const arrow = isSel && this.focused ? `${FG_ACC}▸${RST}` : " ";
-      const numStr = `${FG_DIM}${String(msg.index).padStart(2)}${RST}`;
+      const numStr = `${FG_FAINT}${String(msg.index).padStart(2)}${RST}`;
       const timeStr = `${FG_TIME}${fmtTime(msg.timestamp)}${RST}`;
 
       if (isExp) {
@@ -484,14 +485,16 @@ class SidebarComponent {
     };
   }
 
-  private renderCard(w: number, pad: string, title: string, rows: string[], accent = FG_DIM): string[] {
-    const out: string[] = [];
-    const max = Math.max(0, w - visibleWidth(pad) - 1);
-    out.push(fillRow(`${pad}${accent}●${RST} ${FG_DIM}${title.toUpperCase()}${RST}`, w, BG));
-    for (const row of rows) {
-      out.push(fillRow(`${pad}${truncateToWidth(row, max, "…")}`, w, BG_CARD));
-    }
-    return out;
+  private renderDockHeader(w: number, pad: string, title: string): string {
+    const ruleW = Math.max(0, w - visibleWidth(pad) - title.length - 1);
+    return fillRow(`${pad}${FG_FAINT}${title}${RST} ${FG_FAINT}${"─".repeat(ruleW)}${RST}`, w, BG);
+  }
+
+  private renderDockRow(w: number, pad: string, label: string, value: string): string {
+    const labelW = 5;
+    const labelText = `${FG_FAINT}${label.padEnd(labelW)}${RST}`;
+    const maxValueW = Math.max(0, w - visibleWidth(pad) - labelW - 1);
+    return fillRow(`${pad}${labelText} ${truncateToWidth(value, maxValueW, "…")}`, w, BG_CARD);
   }
 
   private renderStatusCards(w: number, pad: string, blank: string): string[] {
@@ -500,6 +503,7 @@ class SidebarComponent {
     const rows: string[] = [];
 
     rows.push(fillRow(`${blank}`, w, BG));
+    rows.push(this.renderDockHeader(w, pad, "runtime"));
 
     const cwd = formatCwd(this.ctx.sessionManager.getCwd());
     const branch = footerData?.getGitBranch();
@@ -508,24 +512,21 @@ class SidebarComponent {
       `${FG_BRIGHT}${cwd}${RST}`,
       branch ? `${FG_ACC}${branch}${RST}` : undefined,
       sessionName ? `${FG_MID}${sessionName}${RST}` : undefined,
-    ].filter(Boolean).join(` ${FG_DIM}•${RST} `);
-    rows.push(...this.renderCard(w, pad, "workspace", [workspaceBits], FG_OK));
+    ].filter(Boolean).join(` ${FG_FAINT}•${RST} `);
+    rows.push(this.renderDockRow(w, pad, "cwd", workspaceBits));
 
     const model = this.ctx.model;
     if (model) {
-      const providerPrefix = footerData && footerData.getAvailableProviderCount() > 1 ? `${FG_DIM}${model.provider}${RST} ` : "";
-      const thinking = model.reasoning ? ` ${FG_DIM}•${RST} ${FG_MID}${this.getThinkingLevel()}${RST}` : "";
-      rows.push(fillRow(`${blank}`, w, BG));
-      rows.push(...this.renderCard(w, pad, "model", [
-        `${providerPrefix}${FG_BRIGHT}${model.id}${RST}${thinking}`,
-      ], FG_ACC));
+      const providerPrefix = footerData && footerData.getAvailableProviderCount() > 1 ? `${FG_FAINT}${model.provider}${RST} ` : "";
+      const thinking = model.reasoning ? ` ${FG_FAINT}•${RST} ${FG_MID}${this.getThinkingLevel()}${RST}` : "";
+      rows.push(this.renderDockRow(w, pad, "model", `${providerPrefix}${FG_BRIGHT}${model.id}${RST}${thinking}`));
     }
 
     const usingSub = model ? Boolean((this.ctx.modelRegistry as any).isUsingOAuth?.(model)) : false;
     const contextPercent = usage.contextPercent;
     const contextDisplay = contextPercent === null
-      ? `ctx ?/${formatTokens(usage.contextWindow)}`
-      : `ctx ${contextPercent.toFixed(1)}%/${formatTokens(usage.contextWindow)}`;
+      ? `?/${formatTokens(usage.contextWindow)}`
+      : `${contextPercent.toFixed(1)}%/${formatTokens(usage.contextWindow)}`;
     const costDisplay = `$${usage.cost.toFixed(3)}${usingSub ? " sub" : ""}`;
     const tokenParts = [
       usage.input ? `↑${formatTokens(usage.input)}` : undefined,
@@ -534,27 +535,19 @@ class SidebarComponent {
       usage.cacheWrite ? `W${formatTokens(usage.cacheWrite)}` : undefined,
       usage.latestCacheHitRate !== undefined && (usage.cacheRead || usage.cacheWrite) ? `CH${usage.latestCacheHitRate.toFixed(1)}%` : undefined,
     ].filter(Boolean).join(" ");
-    rows.push(fillRow(`${blank}`, w, BG));
-    rows.push(...this.renderCard(w, pad, "usage", [
-      `${FG_DIM}cost${RST} ${FG_BRIGHT}${costDisplay}${RST}`,
-      `${contextColor(contextPercent)}${contextDisplay}${RST} ${progressBar(contextPercent, 9)}`,
-      tokenParts ? `${FG_DIM}tok${RST} ${FG_MID}${tokenParts}${RST}` : `${FG_DIM}tok no usage yet${RST}`,
-    ], contextColor(contextPercent)));
+    rows.push(this.renderDockRow(w, pad, "ctx", `${contextColor(contextPercent)}${contextDisplay}${RST} ${progressBar(contextPercent, 10)}`));
+    rows.push(this.renderDockRow(w, pad, "use", `${FG_BRIGHT}${costDisplay}${RST}${tokenParts ? ` ${FG_FAINT}•${RST} ${FG_MID}${tokenParts}${RST}` : ` ${FG_FAINT}• no token usage${RST}`}`));
 
     const statuses = footerData ? [...footerData.getExtensionStatuses().entries()].sort(([a], [b]) => a.localeCompare(b)) : [];
-    if (statuses.length > 0) {
-      rows.push(fillRow(`${blank}`, w, BG));
-      rows.push(...this.renderCard(w, pad, "status", statuses.slice(0, 3).map(([, text]) =>
-        `${FG_INFO}•${RST} ${FG_MID}${sanitizeStatusText(text)}${RST}`,
-      ), FG_INFO));
+    for (const [, text] of statuses.slice(0, 2)) {
+      rows.push(this.renderDockRow(w, pad, "stat", `${FG_INFO}•${RST} ${FG_MID}${sanitizeStatusText(text)}${RST}`));
     }
 
     rows.push(fillRow(`${blank}`, w, BG));
-    if (this.focused) {
-      rows.push(fillRow(`${pad}${FG_DIM}↑↓${RST} ${FG_MID}nav${RST}  ${FG_DIM}Enter${RST} ${FG_MID}expand${RST}  ${FG_DIM}Esc${RST} ${FG_MID}close${RST}`, w, BG));
-    } else {
-      rows.push(fillRow(`${pad}${FG_DIM}Ctrl+Shift+H${RST} ${FG_MID}focus sidebar${RST}`, w, BG));
-    }
+    const hint = this.focused
+      ? `${FG_DIM}↑↓${RST} ${FG_MID}nav${RST} ${FG_FAINT}·${RST} ${FG_DIM}Enter${RST} ${FG_MID}expand${RST} ${FG_FAINT}·${RST} ${FG_DIM}Esc${RST} ${FG_MID}done${RST}`
+      : `${FG_DIM}Ctrl+Shift+H${RST} ${FG_MID}focus${RST}`;
+    rows.push(fillRow(`${pad}${truncateToWidth(hint, w - visibleWidth(pad), "…")}`, w, BG_HDR));
 
     return rows;
   }
