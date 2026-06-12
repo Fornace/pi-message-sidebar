@@ -177,16 +177,20 @@ class SidebarComponent {
     // Accent bar color
     const barColor = this.focused ? FG_ACC : FG_DIM;
     const bar = `${barColor}${BAR}${RST}`;
-    const barSpace = `${FG_DIM} ${RST}`;
+    const pad = "  "; // 2 spaces after bar
+    const barPad = `${bar}${pad}`;
+    const barSpace = `${FG_DIM}${BAR}${RST}${pad}`;
 
     // ── Header ──
+    lines.push(fillRow(`${barPad}`, w, BG_HDR)); // blank line above
     const hdrIcon = this.focused ? `${FG_ACC}●${RST}` : `${FG_DIM}○${RST}`;
     const hdrTitle = `${BOLD}${FG_BRIGHT}Messages${RST}`;
     const hdrCount = `${FG_DIM} ${this.msgs.length}${RST}`;
     const hdrMode = this.focused
       ? `  ${FG_DOT}●${RST} ${FG_MID}focused${RST}`
       : `  ${FG_DIM}passive${RST}`;
-    lines.push(fillRow(`${bar} ${hdrIcon} ${hdrTitle}${hdrCount}${hdrMode}`, w, BG_HDR));
+    lines.push(fillRow(`${barPad}${hdrIcon} ${hdrTitle}${hdrCount}${hdrMode}`, w, BG_HDR));
+    lines.push(fillRow(`${barPad}`, w, BG_HDR)); // blank line below
 
     // Thin separator
     const sep = `${FG_DIM}${"─".repeat(w - 2)}${RST}`;
@@ -194,8 +198,11 @@ class SidebarComponent {
 
     // ── Empty state ──
     if (this.msgs.length === 0) {
-      lines.push(fillRow(`${barSpace} ${FG_DIM}No messages yet${RST}`, w, BG));
-      while (lines.length < targetH) lines.push(fillRow(`${barSpace}`, w, BG));
+      lines.push(fillRow(`${barPad}`, w, BG)); // blank
+      lines.push(fillRow(`${barPad}${FG_DIM}No messages yet${RST}`, w, BG));
+      lines.push(fillRow(`${barPad}`, w, BG)); // blank
+      while (lines.length < targetH - 3) lines.push(fillRow(`${barSpace}`, w, BG));
+      lines.push(fillRow(`${barPad}`, w, BG)); // blank before footer
       this.cachedLines = lines; this.cachedW = width; this.cachedH = targetH; this.lastVer = this.ver;
       return lines;
     }
@@ -241,28 +248,28 @@ class SidebarComponent {
 
       if (isExp) {
         // ── Expanded ──
-        const hdrLine = `${bar} ${arrow}${numStr} ${timeStr}`;
+        const hdrLine = `${barPad}${arrow}${numStr} ${timeStr}`;
         lines.push(fillRow(hdrLine, w, bg));
 
-        const maxTextW = SIDEBAR_WIDTH - 6;
+        const maxTextW = SIDEBAR_WIDTH - 8;
         const wrapped = wrapText(msg.text.replace(/\n/g, " "), maxTextW);
         const maxLines = 8;
         const shown = wrapped.slice(0, maxLines);
 
         for (const line of shown) {
-          lines.push(fillRow(`${barSpace}   ${FG_EXP}${line}${RST}`, w, bg));
+          lines.push(fillRow(`${barPad}  ${FG_EXP}${line}${RST}`, w, bg));
         }
         if (wrapped.length > maxLines) {
-          lines.push(fillRow(`${barSpace}   ${FG_DIM}${DIM}…+${wrapped.length - maxLines} lines${RST}`, w, bg));
+          lines.push(fillRow(`${barPad}  ${FG_DIM}${DIM}…+${wrapped.length - maxLines} lines${RST}`, w, bg));
         }
         // blank separator after expanded
-        lines.push(fillRow(`${barSpace}`, w, bg));
+        lines.push(fillRow(`${barPad}`, w, bg));
       } else {
         // ── Collapsed ──
-        const maxText = SIDEBAR_WIDTH - 13;
+        const maxText = SIDEBAR_WIDTH - 15;
         const text = truncateToWidth(msg.text.replace(/\n/g, " "), maxText, "…");
         const fg = isSel ? FG_BRIGHT : FG_NORM;
-        const content = `${bar} ${arrow}${numStr} ${timeStr} ${fg}${text}${RST}`;
+        const content = `${barPad}${arrow}${numStr} ${timeStr} ${fg}${text}${RST}`;
         lines.push(fillRow(content, w, bg));
       }
 
@@ -270,16 +277,16 @@ class SidebarComponent {
     }
 
     // ── Fill remaining ──
-    while (lines.length < targetH - 2) {
+    while (lines.length < targetH - 3) {
       lines.push(fillRow(`${barSpace}`, w, BG));
     }
 
     // ── Footer ──
-    lines.push(fillRow(`${barSpace}${FG_DIM}${"─".repeat(w - 2)}${RST}`, w, BG));
+    lines.push(fillRow(`${barPad}`, w, BG)); // blank before footer
     if (this.focused) {
-      lines.push(fillRow(`${barSpace} ${FG_DIM}↑↓${RST} ${FG_MID}nav${RST}  ${FG_DIM}Enter${RST} ${FG_MID}expand${RST}  ${FG_DIM}Esc${RST} ${FG_MID}close${RST}`, w, BG));
+      lines.push(fillRow(`${barPad}${FG_DIM}↑↓${RST} ${FG_MID}nav${RST}  ${FG_DIM}Enter${RST} ${FG_MID}expand${RST}  ${FG_DIM}Esc${RST} ${FG_MID}close${RST}`, w, BG));
     } else {
-      lines.push(fillRow(`${barSpace} ${FG_DIM}Ctrl+Shift+H to navigate${RST}`, w, BG));
+      lines.push(fillRow(`${barPad}${FG_DIM}Ctrl+Shift+H to navigate${RST}`, w, BG));
     }
 
     this.cachedLines = lines;
