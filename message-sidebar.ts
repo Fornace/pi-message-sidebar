@@ -3,8 +3,8 @@
  *
  * Always visible in passive mode. Ctrl+Shift+H focuses for navigation.
  *
- * Design: no box borders, left accent bar, flat dark background,
- * consistent fill via BG-injection after every ANSI reset.
+ * Design: borderless layered surfaces, stable spatial zones,
+ * semantic accents, and consistent fill via BG-injection after every ANSI reset.
  *
  * Focused mode (Ctrl+Shift+H):
  *   - ↑/↓          navigate all messages
@@ -14,7 +14,7 @@
  *   - Escape        return to passive mode
  */
 
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { basename } from "node:path";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -36,9 +36,13 @@ const FG_MID   = "\x1b[38;5;248m";
 const FG_NORM  = "\x1b[38;5;250m";
 const FG_BRIGHT= "\x1b[38;5;255m";
 const FG_ACC   = "\x1b[38;5;75m";   // blue accent
+const FG_INFO  = "\x1b[38;5;80m";   // cyan/info
+const FG_OK    = "\x1b[38;5;114m";  // green/safe
+const FG_WARN  = "\x1b[38;5;215m";  // amber/warning
+const FG_ERR   = "\x1b[38;5;203m";  // red/error
 const FG_TIME  = "\x1b[38;5;245m";
 const FG_EXP   = "\x1b[38;5;252m";  // expanded text
-const FG_DOT   = "\x1b[38;5;114m";  // green dot (focused)
+const FG_DOT   = FG_OK;              // focused indicator
 
 const BOLD     = "\x1b[1m";
 const DIM      = "\x1b[2m";
@@ -121,6 +125,21 @@ function formatTokens(count: number): string {
   if (count < 1000000) return `${Math.round(count / 1000)}k`;
   if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
   return `${Math.round(count / 1000000)}M`;
+}
+
+function contextColor(percent: number | null): string {
+  if (percent === null) return FG_DIM;
+  if (percent > 90) return FG_ERR;
+  if (percent > 70) return FG_WARN;
+  return FG_OK;
+}
+
+function progressBar(percent: number | null, width = 10): string {
+  if (percent === null) return `${FG_DIM}${"░".repeat(width)}${RST}`;
+  const clamped = Math.max(0, Math.min(100, percent));
+  const filled = Math.round((clamped / 100) * width);
+  const color = contextColor(percent);
+  return `${color}${"█".repeat(filled)}${FG_DIM}${"░".repeat(width - filled)}${RST}`;
 }
 
 function formatCwd(cwd: string): string {
@@ -213,16 +232,18 @@ class LayoutReserveComponent {
 
 class FooterBridgeComponent {
   private unsubscribe: () => void;
+  private onChange: () => void;
   private onDispose: () => void;
 
   constructor(footerData: FooterData, onChange: () => void, onDispose: () => void) {
+    this.onChange = onChange;
     this.unsubscribe = footerData.onBranchChange(onChange);
     this.onDispose = onDispose;
   }
 
   // Empty footer: the sidebar renders all footer/status information instead.
   render(): string[] { return []; }
-  invalidate() {}
+  invalidate() { this.onChange(); }
   dispose() { this.unsubscribe(); this.onDispose(); }
 }
 
@@ -463,11 +484,12 @@ class SidebarComponent {
     };
   }
 
-  private renderCard(w: number, pad: string, title: string, rows: string[]): string[] {
+  private renderCard(w: number, pad: string, title: string, rows: string[], accent = FG_DIM): string[] {
     const out: string[] = [];
-    out.push(fillRow(`${pad}${FG_DIM}${title.toUpperCase()}${RST}`, w, BG));
+    const max = Math.max(0, w - visibleWidth(pad) - 1);
+    out.push(fillRow(`${pad}${accent}●${RST} ${FG_DIM}${title.toUpperCase()}${RST}`, w, BG));
     for (const row of rows) {
-      out.push(fillRow(`${pad}${row}`, w, BG_CARD));
+      out.push(fillRow(`${pad}${truncateToWidth(row, max, "…")}`, w, BG_CARD));
     }
     return out;
   }
@@ -482,12 +504,12 @@ class SidebarComponent {
     const cwd = formatCwd(this.ctx.sessionManager.getCwd());
     const branch = footerData?.getGitBranch();
     const sessionName = this.ctx.sessionManager.getSessionName?.();
-    const workspaceLine = [
-      `${FG_BRIGHT}${truncateToWidth(cwd, w - visibleWidth(pad) - 2, "…")}${RST}`,
+    const workspaceBits = [
+      `${FG_BRIGHT}${cwd}${RST}`,
       branch ? `${FG_ACC}${branch}${RST}` : undefined,
-      sessionName ? `${FG_MID}${truncateToWidth(sessionName, 18, "…")}${RST}` : undefined,
+      sessionName ? `${FG_MID}${sessionName}${RST}` : undefined,
     ].filter(Boolean).join(` ${FG_DIM}•${RST} `);
-    rows.push(...this.renderCard(w, pad, "workspace", [workspaceLine]));
+    rows.push(...this.renderCard(w, pad, "workspace", [workspaceBits], FG_OK));
 
     const model = this.ctx.model;
     if (model) {
@@ -495,14 +517,15 @@ class SidebarComponent {
       const thinking = model.reasoning ? ` ${FG_DIM}•${RST} ${FG_MID}${this.getThinkingLevel()}${RST}` : "";
       rows.push(fillRow(`${blank}`, w, BG));
       rows.push(...this.renderCard(w, pad, "model", [
-        `${providerPrefix}${FG_BRIGHT}${truncateToWidth(model.id, w - visibleWidth(pad) - 2, "…")}${RST}${thinking}`,
-      ]));
+        `${providerPrefix}${FG_BRIGHT}${model.id}${RST}${thinking}`,
+      ], FG_ACC));
     }
 
     const usingSub = model ? Boolean((this.ctx.modelRegistry as any).isUsingOAuth?.(model)) : false;
-    const contextDisplay = usage.contextPercent === null
-      ? `?/${formatTokens(usage.contextWindow)}`
-      : `${usage.contextPercent.toFixed(1)}%/${formatTokens(usage.contextWindow)}`;
+    const contextPercent = usage.contextPercent;
+    const contextDisplay = contextPercent === null
+      ? `ctx ?/${formatTokens(usage.contextWindow)}`
+      : `ctx ${contextPercent.toFixed(1)}%/${formatTokens(usage.contextWindow)}`;
     const costDisplay = `$${usage.cost.toFixed(3)}${usingSub ? " sub" : ""}`;
     const tokenParts = [
       usage.input ? `↑${formatTokens(usage.input)}` : undefined,
@@ -513,23 +536,24 @@ class SidebarComponent {
     ].filter(Boolean).join(" ");
     rows.push(fillRow(`${blank}`, w, BG));
     rows.push(...this.renderCard(w, pad, "usage", [
-      `${FG_BRIGHT}${costDisplay}${RST} ${FG_DIM}•${RST} ${FG_MID}${contextDisplay}${RST}`,
-      tokenParts ? `${FG_DIM}${tokenParts}${RST}` : `${FG_DIM}no token usage yet${RST}`,
-    ]));
+      `${FG_DIM}cost${RST} ${FG_BRIGHT}${costDisplay}${RST}`,
+      `${contextColor(contextPercent)}${contextDisplay}${RST} ${progressBar(contextPercent, 9)}`,
+      tokenParts ? `${FG_DIM}tok${RST} ${FG_MID}${tokenParts}${RST}` : `${FG_DIM}tok no usage yet${RST}`,
+    ], contextColor(contextPercent)));
 
-    const statuses = footerData ? [...footerData.getExtensionStatuses().entries()] : [];
+    const statuses = footerData ? [...footerData.getExtensionStatuses().entries()].sort(([a], [b]) => a.localeCompare(b)) : [];
     if (statuses.length > 0) {
       rows.push(fillRow(`${blank}`, w, BG));
       rows.push(...this.renderCard(w, pad, "status", statuses.slice(0, 3).map(([, text]) =>
-        `${FG_MID}${truncateToWidth(sanitizeStatusText(text), w - visibleWidth(pad) - 2, "…")}${RST}`,
-      )));
+        `${FG_INFO}•${RST} ${FG_MID}${sanitizeStatusText(text)}${RST}`,
+      ), FG_INFO));
     }
 
     rows.push(fillRow(`${blank}`, w, BG));
     if (this.focused) {
       rows.push(fillRow(`${pad}${FG_DIM}↑↓${RST} ${FG_MID}nav${RST}  ${FG_DIM}Enter${RST} ${FG_MID}expand${RST}  ${FG_DIM}Esc${RST} ${FG_MID}close${RST}`, w, BG));
     } else {
-      rows.push(fillRow(`${pad}${FG_DIM}Ctrl+Shift+H to navigate${RST}`, w, BG));
+      rows.push(fillRow(`${pad}${FG_DIM}Ctrl+Shift+H${RST} ${FG_MID}focus sidebar${RST}`, w, BG));
     }
 
     return rows;
@@ -546,6 +570,20 @@ export default function (pi: ExtensionAPI) {
   let cachedCtx: ExtensionContext | null = null;
   let footerDataRef: FooterData | null = null;
   let launched = false;
+  let refreshQueued = false;
+
+  function scheduleRefresh(ctx: ExtensionContext | null = cachedCtx) {
+    if (refreshQueued) return;
+    refreshQueued = true;
+    // Extension message_end fires before Pi persists the finalized message.
+    // Defer one event-loop turn so usage/message totals read from sessionManager are current.
+    setImmediate(() => {
+      refreshQueued = false;
+      const activeCtx = ctx ?? cachedCtx;
+      if (sidebarRef && activeCtx) sidebarRef.updateMessages(collectUserMessages(activeCtx));
+      else sidebarRef?.refresh();
+    });
+  }
 
   function launch(ctx: ExtensionContext) {
     if (launched || ctx.mode !== "tui") return;
@@ -597,10 +635,10 @@ export default function (pi: ExtensionAPI) {
 
       ctx.ui.setFooter((tui, _theme, footerData) => {
         footerDataRef = footerData as FooterData;
-        sidebarRef?.refresh();
+        scheduleRefresh(ctx);
         return new FooterBridgeComponent(
           footerData as FooterData,
-          () => sidebarRef?.refresh(),
+          () => scheduleRefresh(ctx),
           () => {
             if (footerDataRef === footerData) footerDataRef = null;
           },
@@ -620,9 +658,13 @@ export default function (pi: ExtensionAPI) {
     handler: (_a, ctx) => toggleFocus(ctx),
   });
 
-  pi.on("message_end", () => {
-    if (sidebarRef && cachedCtx) sidebarRef.updateMessages(collectUserMessages(cachedCtx));
-  });
+  pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("turn_end", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("agent_end", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("model_select", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("thinking_level_select", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("session_compact", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("session_tree", (_event, ctx) => scheduleRefresh(ctx));
 
   pi.on("session_start", (_e, ctx) => {
     if (ctx.mode !== "tui") return;
