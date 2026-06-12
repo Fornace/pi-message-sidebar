@@ -317,7 +317,7 @@ export default function (pi: ExtensionAPI) {
           anchor: "top-right",
           width: SIDEBAR_WIDTH,
           maxHeight: "100%",
-          margin: { top: 0, right: 0, bottom: 0, left: 1 },
+          margin: { top: 2, right: 0, bottom: 0, left: 1 },
           nonCapturing: true,
         },
         onHandle: (handle) => { overlayHandle = handle; },
