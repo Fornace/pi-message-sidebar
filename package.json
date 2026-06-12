@@ -1,0 +1,12 @@
+{
+  "name": "pi-message-sidebar",
+  "version": "1.0.0",
+  "description": "Pi extension: persistent message history sidebar with Ctrl+Shift+H focus mode",
+  "keywords": ["pi-package", "pi-extension"],
+  "author": "Fornace",
+  "license": "MIT",
+  "private": true,
+  "pi": {
+    "extensions": ["./message-sidebar.ts"]
+  }
+}
