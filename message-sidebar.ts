@@ -21,6 +21,8 @@ import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tu
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const SIDEBAR_WIDTH = 42;
+const SIDEBAR_GAP = 1;
+const RESERVED_WIDTH = SIDEBAR_WIDTH + SIDEBAR_GAP;
 const MIN_MAIN_WIDTH = 80;
 const PINNED_COUNT = 5;
 const GAP_WINDOW = 3;
@@ -223,7 +225,7 @@ class LayoutReserveComponent {
   private uninstall: () => void;
 
   constructor(tui: any) {
-    this.uninstall = installLayoutPatch(tui, SIDEBAR_WIDTH);
+    this.uninstall = installLayoutPatch(tui, RESERVED_WIDTH);
   }
 
   render(): string[] { return []; }
@@ -330,7 +332,7 @@ class SidebarComponent {
 
   render(width: number): string[] {
     const termH = this.tui.terminal?.rows ?? 40;
-    const targetH = Math.max(15, termH - 2);
+    const targetH = Math.max(15, termH);
     const sig = this.footerSignature();
 
     if (width === this.cachedW && targetH === this.cachedH && this.cachedSig === sig && this.lastVer === this.ver) {
@@ -602,8 +604,8 @@ export default function (pi: ExtensionAPI) {
           anchor: "top-right",
           width: SIDEBAR_WIDTH,
           maxHeight: "100%",
-          margin: { top: 2, right: 0, bottom: 0, left: 1 },
-          visible: (termWidth: number) => termWidth >= MIN_MAIN_WIDTH + SIDEBAR_WIDTH,
+          margin: { top: 0, right: 0, bottom: 0, left: 0 },
+          visible: (termWidth: number) => termWidth >= MIN_MAIN_WIDTH + RESERVED_WIDTH,
           nonCapturing: true,
         },
         onHandle: (handle) => { overlayHandle = handle; },
