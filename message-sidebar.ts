@@ -20,6 +20,7 @@ import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tu
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const SIDEBAR_WIDTH = 42;
+const MIN_MAIN_WIDTH = 80;
 const PINNED_COUNT = 5;
 const GAP_WINDOW = 3;
 
@@ -113,6 +114,74 @@ function wrapText(text: string, maxW: number): string[] {
   }
   if (cur) lines.push(cur);
   return lines.length > 0 ? lines : [""];
+}
+
+// ── Layout reservation shim ─────────────────────────────────────────────────
+
+const LAYOUT_PATCH_KEY = Symbol.for("pi-message-sidebar.layoutPatch");
+
+interface LayoutPatchState {
+  originalRender: (width: number) => string[];
+  refs: number;
+  reserveCols: number;
+}
+
+function getReservedColumns(width: number, reserveCols: number): number {
+  // On narrow terminals, don't reserve space; let pi keep a usable main area.
+  return width >= MIN_MAIN_WIDTH + reserveCols ? reserveCols : 0;
+}
+
+function installLayoutPatch(tui: any, reserveCols: number): () => void {
+  const existing = tui[LAYOUT_PATCH_KEY] as LayoutPatchState | undefined;
+  if (existing) {
+    existing.refs++;
+    existing.reserveCols = reserveCols;
+    tui.requestRender?.(true);
+    return () => {
+      existing.refs--;
+      if (existing.refs <= 0) {
+        tui.render = existing.originalRender;
+        delete tui[LAYOUT_PATCH_KEY];
+        tui.requestRender?.(true);
+      }
+    };
+  }
+
+  const state: LayoutPatchState = {
+    originalRender: tui.render.bind(tui),
+    refs: 1,
+    reserveCols,
+  };
+
+  tui[LAYOUT_PATCH_KEY] = state;
+  tui.render = (width: number): string[] => {
+    const reserved = getReservedColumns(width, state.reserveCols);
+    const baseWidth = Math.max(1, width - reserved);
+    return state.originalRender(baseWidth);
+  };
+
+  tui.requestRender?.(true);
+
+  return () => {
+    state.refs--;
+    if (state.refs <= 0) {
+      tui.render = state.originalRender;
+      delete tui[LAYOUT_PATCH_KEY];
+      tui.requestRender?.(true);
+    }
+  };
+}
+
+class LayoutReserveComponent {
+  private uninstall: () => void;
+
+  constructor(tui: any) {
+    this.uninstall = installLayoutPatch(tui, SIDEBAR_WIDTH);
+  }
+
+  render(): string[] { return []; }
+  invalidate() {}
+  dispose() { this.uninstall(); }
 }
 
 // ── Sidebar Component ───────────────────────────────────────────────────────
@@ -325,6 +394,7 @@ export default function (pi: ExtensionAPI) {
           width: SIDEBAR_WIDTH,
           maxHeight: "100%",
           margin: { top: 2, right: 0, bottom: 0, left: 1 },
+          visible: (termWidth: number) => termWidth >= MIN_MAIN_WIDTH + SIDEBAR_WIDTH,
           nonCapturing: true,
         },
         onHandle: (handle) => { overlayHandle = handle; },
@@ -339,7 +409,16 @@ export default function (pi: ExtensionAPI) {
     else { sidebarRef.setFocused(true); overlayHandle.focus(); }
   }
 
-  pi.on("session_start", (_e, ctx) => { launch(ctx); });
+  pi.on("session_start", (_e, ctx) => {
+    if (ctx.mode === "tui") {
+      ctx.ui.setWidget(
+        "message-sidebar-layout-reserve",
+        (tui) => new LayoutReserveComponent(tui),
+        { placement: "belowEditor" },
+      );
+    }
+    launch(ctx);
+  });
 
   pi.registerShortcut("ctrl+shift+h", {
     description: "Focus/unfocus message sidebar",
@@ -358,9 +437,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_e, ctx) => {
     if (ctx.mode !== "tui") return;
     ctx.ui.onTerminalInput((data: string) => {
-      if (matchesKey(data, "escape") && sidebarRef && !sidebarRef.isFocused() && overlayHandle?.isFocused()) {
+      if (matchesKey(data, "escape") && sidebarRef?.isFocused() && overlayHandle?.isFocused()) {
+        sidebarRef.setFocused(false);
         overlayHandle.unfocus();
-        return { consume: false };
+        return { consume: true };
       }
       return undefined;
     });
