@@ -16,6 +16,7 @@
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { basename } from "node:path";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -28,6 +29,7 @@ const GAP_WINDOW = 3;
 const BG       = "\x1b[48;5;235m";  // panel background
 const BG_SEL   = "\x1b[48;5;237m";  // selected row
 const BG_HDR   = "\x1b[48;5;234m";  // header (slightly darker)
+const BG_CARD  = "\x1b[48;5;236m";  // subtle info cards
 
 const FG_DIM   = "\x1b[38;5;243m";
 const FG_MID   = "\x1b[38;5;248m";
@@ -42,8 +44,6 @@ const BOLD     = "\x1b[1m";
 const DIM      = "\x1b[2m";
 const RST      = "\x1b[0m";
 
-// Left accent bar character
-const BAR = "▎";
 
 // ── Core rendering fix: inject BG after every RST ──────────────────────────
 /**
@@ -80,6 +80,13 @@ interface UserMsg {
   timestamp: string;
 }
 
+type FooterData = {
+  getGitBranch(): string | null;
+  getExtensionStatuses(): ReadonlyMap<string, string>;
+  getAvailableProviderCount(): number;
+  onBranchChange(callback: () => void): () => void;
+};
+
 function collectUserMessages(ctx: ExtensionContext): UserMsg[] {
   const entries = ctx.sessionManager.getBranch();
   const msgs: UserMsg[] = [];
@@ -101,6 +108,26 @@ function fmtTime(ts: string): string {
     const d = new Date(ts);
     return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   } catch { return ""; }
+}
+
+function sanitizeStatusText(text: string): string {
+  return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+}
+
+function formatTokens(count: number): string {
+  if (!count) return "0";
+  if (count < 1000) return String(count);
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+  return `${Math.round(count / 1000000)}M`;
+}
+
+function formatCwd(cwd: string): string {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (home && cwd === home) return "~";
+  if (home && cwd.startsWith(`${home}/`)) return `~/${cwd.slice(home.length + 1)}`;
+  return basename(cwd) || cwd;
 }
 
 function wrapText(text: string, maxW: number): string[] {
@@ -184,6 +211,21 @@ class LayoutReserveComponent {
   dispose() { this.uninstall(); }
 }
 
+class FooterBridgeComponent {
+  private unsubscribe: () => void;
+  private onDispose: () => void;
+
+  constructor(footerData: FooterData, onChange: () => void, onDispose: () => void) {
+    this.unsubscribe = footerData.onBranchChange(onChange);
+    this.onDispose = onDispose;
+  }
+
+  // Empty footer: the sidebar renders all footer/status information instead.
+  render(): string[] { return []; }
+  invalidate() {}
+  dispose() { this.unsubscribe(); this.onDispose(); }
+}
+
 // ── Sidebar Component ───────────────────────────────────────────────────────
 
 class SidebarComponent {
@@ -193,15 +235,29 @@ class SidebarComponent {
   private msgs: UserMsg[] = [];
   private done: (result: undefined) => void;
   private tui: any;
+  private ctx: ExtensionContext;
+  private getFooterData: () => FooterData | null;
+  private getThinkingLevel: () => string;
 
   private cachedW = -1;
   private cachedH = -1;
+  private cachedSig = "";
   private cachedLines: string[] = [];
   private ver = 0;
   private lastVer = -1;
 
-  constructor(tui: any, msgs: UserMsg[], done: (result: undefined) => void) {
+  constructor(
+    tui: any,
+    ctx: ExtensionContext,
+    getFooterData: () => FooterData | null,
+    getThinkingLevel: () => string,
+    msgs: UserMsg[],
+    done: (result: undefined) => void,
+  ) {
     this.tui = tui;
+    this.ctx = ctx;
+    this.getFooterData = getFooterData;
+    this.getThinkingLevel = getThinkingLevel;
     this.msgs = msgs;
     this.done = done;
     this.selected = msgs.length > 0 ? msgs.length - 1 : 0;
@@ -232,23 +288,40 @@ class SidebarComponent {
     }
   }
 
+  refresh() { this.ver++; this.tui.requestRender(); }
+
+  private footerSignature(): string {
+    const footerData = this.getFooterData();
+    const usage = this.computeUsage();
+    const statuses = footerData ? [...footerData.getExtensionStatuses().entries()] : [];
+    return JSON.stringify({
+      usage,
+      cwd: this.ctx.sessionManager.getCwd(),
+      sessionName: this.ctx.sessionManager.getSessionName?.(),
+      branch: footerData?.getGitBranch() ?? null,
+      providerCount: footerData?.getAvailableProviderCount() ?? 0,
+      statuses,
+      model: this.ctx.model ? `${this.ctx.model.provider}/${this.ctx.model.id}` : "none",
+      thinking: this.getThinkingLevel(),
+    });
+  }
+
   render(width: number): string[] {
     const termH = this.tui.terminal?.rows ?? 40;
     const targetH = Math.max(15, termH - 2);
+    const sig = this.footerSignature();
 
-    if (width === this.cachedW && targetH === this.cachedH && this.lastVer === this.ver) {
+    if (width === this.cachedW && targetH === this.cachedH && this.cachedSig === sig && this.lastVer === this.ver) {
       return this.cachedLines;
     }
 
     const w = Math.min(SIDEBAR_WIDTH, width);
     const lines: string[] = [];
 
-    // Accent bar color
-    const barColor = this.focused ? FG_ACC : FG_DIM;
-    const bar = `${barColor}${BAR}${RST}`;
-    const pad = "  "; // 2 spaces after bar
-    const barPad = `${bar}${pad}`;
-    const barSpace = `${FG_DIM}${BAR}${RST}${pad}`;
+    // Borderless internal padding. No left border/accent bar.
+    const pad = "   ";
+    const barPad = pad;
+    const barSpace = pad;
 
     // ── Header ──
     lines.push(fillRow(`${barPad}`, w, BG_HDR)); // blank line above
@@ -261,8 +334,8 @@ class SidebarComponent {
     lines.push(fillRow(`${barPad}${hdrIcon} ${hdrTitle}${hdrCount}${hdrMode}`, w, BG_HDR));
     lines.push(fillRow(`${barPad}`, w, BG_HDR)); // blank line below
 
-    // Thin separator
-    const sep = `${FG_DIM}${"─".repeat(w - 2)}${RST}`;
+    // Subtle separator
+    const sep = `${FG_DIM}${"─".repeat(Math.max(0, w - visibleWidth(barSpace) - 3))}${RST}`;
     lines.push(fillRow(`${barSpace}${sep}`, w, BG));
 
     // ── Empty state ──
@@ -270,9 +343,10 @@ class SidebarComponent {
       lines.push(fillRow(`${barPad}`, w, BG)); // blank
       lines.push(fillRow(`${barPad}${FG_DIM}No messages yet${RST}`, w, BG));
       lines.push(fillRow(`${barPad}`, w, BG)); // blank
-      while (lines.length < targetH - 3) lines.push(fillRow(`${barSpace}`, w, BG));
-      lines.push(fillRow(`${barPad}`, w, BG)); // blank before footer
-      this.cachedLines = lines; this.cachedW = width; this.cachedH = targetH; this.lastVer = this.ver;
+      const bottomRows = this.renderStatusCards(w, barPad, barSpace);
+      while (lines.length < targetH - bottomRows.length) lines.push(fillRow(`${barSpace}`, w, BG));
+      lines.push(...bottomRows);
+      this.cachedLines = lines; this.cachedW = width; this.cachedH = targetH; this.cachedSig = sig; this.lastVer = this.ver;
       return lines;
     }
 
@@ -345,27 +419,123 @@ class SidebarComponent {
       lastIdx = idx;
     }
 
-    // ── Fill remaining ──
-    while (lines.length < targetH - 3) {
+    // ── Bottom status cards ──
+    const bottomRows = this.renderStatusCards(w, barPad, barSpace);
+    while (lines.length < targetH - bottomRows.length) {
       lines.push(fillRow(`${barSpace}`, w, BG));
     }
-
-    // ── Footer ──
-    lines.push(fillRow(`${barPad}`, w, BG)); // blank before footer
-    if (this.focused) {
-      lines.push(fillRow(`${barPad}${FG_DIM}↑↓${RST} ${FG_MID}nav${RST}  ${FG_DIM}Enter${RST} ${FG_MID}expand${RST}  ${FG_DIM}Esc${RST} ${FG_MID}close${RST}`, w, BG));
-    } else {
-      lines.push(fillRow(`${barPad}${FG_DIM}Ctrl+Shift+H to navigate${RST}`, w, BG));
-    }
+    lines.push(...bottomRows);
 
     this.cachedLines = lines;
     this.cachedW = width;
     this.cachedH = targetH;
+    this.cachedSig = sig;
     this.lastVer = this.ver;
     return lines;
   }
 
-  invalidate() { this.cachedW = -1; this.cachedH = -1; this.cachedLines = []; this.lastVer = -1; }
+  private computeUsage() {
+    let input = 0, output = 0, cacheRead = 0, cacheWrite = 0, cost = 0;
+    let latestCacheHitRate: number | undefined;
+
+    for (const entry of this.ctx.sessionManager.getEntries()) {
+      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+      const usage = (entry.message as any).usage ?? {};
+      input += usage.input ?? 0;
+      output += usage.output ?? 0;
+      cacheRead += usage.cacheRead ?? 0;
+      cacheWrite += usage.cacheWrite ?? 0;
+      cost += usage.cost?.total ?? 0;
+      const latestPrompt = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      latestCacheHitRate = latestPrompt > 0 ? ((usage.cacheRead ?? 0) / latestPrompt) * 100 : undefined;
+    }
+
+    const ctxUsage = this.ctx.getContextUsage?.();
+    return {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      cost,
+      latestCacheHitRate,
+      contextPercent: ctxUsage?.percent ?? null,
+      contextWindow: ctxUsage?.contextWindow ?? this.ctx.model?.contextWindow ?? 0,
+    };
+  }
+
+  private renderCard(w: number, pad: string, title: string, rows: string[]): string[] {
+    const out: string[] = [];
+    out.push(fillRow(`${pad}${FG_DIM}${title.toUpperCase()}${RST}`, w, BG));
+    for (const row of rows) {
+      out.push(fillRow(`${pad}${row}`, w, BG_CARD));
+    }
+    return out;
+  }
+
+  private renderStatusCards(w: number, pad: string, blank: string): string[] {
+    const footerData = this.getFooterData();
+    const usage = this.computeUsage();
+    const rows: string[] = [];
+
+    rows.push(fillRow(`${blank}`, w, BG));
+
+    const cwd = formatCwd(this.ctx.sessionManager.getCwd());
+    const branch = footerData?.getGitBranch();
+    const sessionName = this.ctx.sessionManager.getSessionName?.();
+    const workspaceLine = [
+      `${FG_BRIGHT}${truncateToWidth(cwd, w - visibleWidth(pad) - 2, "…")}${RST}`,
+      branch ? `${FG_ACC}${branch}${RST}` : undefined,
+      sessionName ? `${FG_MID}${truncateToWidth(sessionName, 18, "…")}${RST}` : undefined,
+    ].filter(Boolean).join(` ${FG_DIM}•${RST} `);
+    rows.push(...this.renderCard(w, pad, "workspace", [workspaceLine]));
+
+    const model = this.ctx.model;
+    if (model) {
+      const providerPrefix = footerData && footerData.getAvailableProviderCount() > 1 ? `${FG_DIM}${model.provider}${RST} ` : "";
+      const thinking = model.reasoning ? ` ${FG_DIM}•${RST} ${FG_MID}${this.getThinkingLevel()}${RST}` : "";
+      rows.push(fillRow(`${blank}`, w, BG));
+      rows.push(...this.renderCard(w, pad, "model", [
+        `${providerPrefix}${FG_BRIGHT}${truncateToWidth(model.id, w - visibleWidth(pad) - 2, "…")}${RST}${thinking}`,
+      ]));
+    }
+
+    const usingSub = model ? Boolean((this.ctx.modelRegistry as any).isUsingOAuth?.(model)) : false;
+    const contextDisplay = usage.contextPercent === null
+      ? `?/${formatTokens(usage.contextWindow)}`
+      : `${usage.contextPercent.toFixed(1)}%/${formatTokens(usage.contextWindow)}`;
+    const costDisplay = `$${usage.cost.toFixed(3)}${usingSub ? " sub" : ""}`;
+    const tokenParts = [
+      usage.input ? `↑${formatTokens(usage.input)}` : undefined,
+      usage.output ? `↓${formatTokens(usage.output)}` : undefined,
+      usage.cacheRead ? `R${formatTokens(usage.cacheRead)}` : undefined,
+      usage.cacheWrite ? `W${formatTokens(usage.cacheWrite)}` : undefined,
+      usage.latestCacheHitRate !== undefined && (usage.cacheRead || usage.cacheWrite) ? `CH${usage.latestCacheHitRate.toFixed(1)}%` : undefined,
+    ].filter(Boolean).join(" ");
+    rows.push(fillRow(`${blank}`, w, BG));
+    rows.push(...this.renderCard(w, pad, "usage", [
+      `${FG_BRIGHT}${costDisplay}${RST} ${FG_DIM}•${RST} ${FG_MID}${contextDisplay}${RST}`,
+      tokenParts ? `${FG_DIM}${tokenParts}${RST}` : `${FG_DIM}no token usage yet${RST}`,
+    ]));
+
+    const statuses = footerData ? [...footerData.getExtensionStatuses().entries()] : [];
+    if (statuses.length > 0) {
+      rows.push(fillRow(`${blank}`, w, BG));
+      rows.push(...this.renderCard(w, pad, "status", statuses.slice(0, 3).map(([, text]) =>
+        `${FG_MID}${truncateToWidth(sanitizeStatusText(text), w - visibleWidth(pad) - 2, "…")}${RST}`,
+      )));
+    }
+
+    rows.push(fillRow(`${blank}`, w, BG));
+    if (this.focused) {
+      rows.push(fillRow(`${pad}${FG_DIM}↑↓${RST} ${FG_MID}nav${RST}  ${FG_DIM}Enter${RST} ${FG_MID}expand${RST}  ${FG_DIM}Esc${RST} ${FG_MID}close${RST}`, w, BG));
+    } else {
+      rows.push(fillRow(`${pad}${FG_DIM}Ctrl+Shift+H to navigate${RST}`, w, BG));
+    }
+
+    return rows;
+  }
+
+  invalidate() { this.cachedW = -1; this.cachedH = -1; this.cachedSig = ""; this.cachedLines = []; this.lastVer = -1; }
 }
 
 // ── Extension ───────────────────────────────────────────────────────────────
@@ -374,6 +544,7 @@ export default function (pi: ExtensionAPI) {
   let sidebarRef: SidebarComponent | null = null;
   let overlayHandle: any = null;
   let cachedCtx: ExtensionContext | null = null;
+  let footerDataRef: FooterData | null = null;
   let launched = false;
 
   function launch(ctx: ExtensionContext) {
@@ -384,7 +555,14 @@ export default function (pi: ExtensionAPI) {
 
     ctx.ui.custom<undefined>(
       (tui, _theme, _kb, done) => {
-        sidebarRef = new SidebarComponent(tui, msgs, done);
+        sidebarRef = new SidebarComponent(
+          tui,
+          ctx,
+          () => footerDataRef,
+          () => pi.getThinkingLevel(),
+          msgs,
+          done,
+        );
         return sidebarRef;
       },
       {
@@ -416,6 +594,18 @@ export default function (pi: ExtensionAPI) {
         (tui) => new LayoutReserveComponent(tui),
         { placement: "belowEditor" },
       );
+
+      ctx.ui.setFooter((tui, _theme, footerData) => {
+        footerDataRef = footerData as FooterData;
+        sidebarRef?.refresh();
+        return new FooterBridgeComponent(
+          footerData as FooterData,
+          () => sidebarRef?.refresh(),
+          () => {
+            if (footerDataRef === footerData) footerDataRef = null;
+          },
+        );
+      });
     }
     launch(ctx);
   });
