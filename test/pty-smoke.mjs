@@ -13,16 +13,17 @@ for (const helper of ["darwin-arm64", "darwin-x64"].map((arch) => path.resolve(p
 const outputPath = `/tmp/pi-message-sidebar-${mode}-${columns}x${rows}.ansi`;
 const piPath = fs.realpathSync(process.env.PI_BIN ?? "/opt/homebrew/bin/pi");
 const nodePath = fs.realpathSync(process.execPath);
-const args = [
-  piPath,
-  "--no-extensions",
-  "-e", path.resolve("message-sidebar.ts"),
+const args = [piPath];
+if (process.env.SIDEBAR_AUTOLOAD !== "1") {
+  args.push("--no-extensions", "-e", path.resolve("message-sidebar.ts"));
+}
+args.push(
   "--no-skills",
   "--no-prompt-templates",
   "--no-context-files",
   "--no-session",
   "--tui-mode", mode,
-];
+);
 const child = pty.spawn(nodePath, args, {
   name: "xterm-256color",
   cols: columns,

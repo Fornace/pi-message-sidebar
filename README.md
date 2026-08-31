@@ -28,7 +28,7 @@ Pi 0.84.4 or newer. This extension uses the renderer-switching and fullscreen la
 
 ```bash
 git clone git@github.com:Fornace/pi-message-sidebar.git ~/repos/pi-message-sidebar
-ln -sf ~/repos/pi-message-sidebar/message-sidebar.ts ~/.pi/agent/extensions/message-sidebar.ts
+ln -s ~/repos/pi-message-sidebar ~/.pi/agent/extensions/message-sidebar
 ```
 
 ### Pi package
@@ -50,7 +50,7 @@ The sidebar appears automatically in interactive mode when the terminal is at le
 
 ## Architecture
 
-- `message-sidebar.ts` registers lifecycle hooks, commands, and shortcuts.
+- `index.ts` is the auto-discovered extension entrypoint.
 - `src/layout.ts` reserves a real horizontal region in fullscreen mode and composes an equivalent region in regular mode.
 - `src/sidebar-component.ts` owns message navigation and bounded rendering.
 - `src/status-dock.ts` renders session, model, context, cost, and extension status data.

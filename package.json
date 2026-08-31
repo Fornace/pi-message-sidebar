@@ -7,14 +7,15 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "files": ["message-sidebar.ts", "src", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": ["index.ts", "message-sidebar.ts", "src", "README.md", "CHANGELOG.md", "LICENSE"],
   "pi": {
-    "extensions": ["./message-sidebar.ts"]
+    "extensions": ["./index.ts"]
   },
   "scripts": {
     "test": "node --import tsx --test test/*.test.ts",
     "test:pty": "node test/pty-smoke.mjs regular 142 55 && node test/pty-smoke.mjs regular 121 55 && node test/pty-smoke.mjs fullscreen 142 55 && node test/pty-smoke.mjs fullscreen 121 55",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:load": "node --import tsx test/load.test.mjs"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.4",

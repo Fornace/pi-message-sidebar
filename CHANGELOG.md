@@ -4,6 +4,8 @@
 
 > Pi 0.84.4: transcript overlap during TUI mode switches and narrow-pane width failures are resolved by mode-specific reserved layouts.
 
+- Changed development installation to a directory symlink with `index.ts`, so relative `src/` imports resolve through Pi's global extension auto-discovery.
+- Added a real auto-discovery load test for the installed extension shape.
 - Removed the persistent overlay implementation.
 - Added reserved-width rendering for regular TUI mode.
 - Added native `HStack` layout integration for fullscreen TUI mode.
