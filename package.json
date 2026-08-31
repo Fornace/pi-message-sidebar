@@ -1,12 +1,33 @@
 {
   "name": "pi-message-sidebar",
-  "version": "1.0.0",
-  "description": "Pi extension: persistent message history sidebar with Ctrl+Shift+H focus mode",
-  "keywords": ["pi-package", "pi-extension"],
+  "version": "1.1.0",
+  "description": "Persistent responsive message history sidebar for Pi",
+  "keywords": ["pi-package", "pi-extension", "sidebar", "tui"],
   "author": "Fornace",
   "license": "MIT",
   "private": true,
+  "type": "module",
+  "files": ["message-sidebar.ts", "src", "README.md", "CHANGELOG.md", "LICENSE"],
   "pi": {
     "extensions": ["./message-sidebar.ts"]
+  },
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:pty": "node test/pty-smoke.mjs regular 142 55 && node test/pty-smoke.mjs regular 121 55 && node test/pty-smoke.mjs fullscreen 142 55 && node test/pty-smoke.mjs fullscreen 121 55",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-tui": "0.84.4",
+    "@types/node": "^24.0.0",
+    "node-pty": "^1.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.4"
+  },
+  "engines": {
+    "node": ">=22.19.0"
   }
 }
