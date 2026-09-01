@@ -3,10 +3,13 @@
   "version": "1.1.0",
   "description": "Persistent responsive message history sidebar for Pi",
   "keywords": ["pi-package", "pi-extension", "sidebar", "tui"],
-  "author": "Fornace",
+  "author": "Francesco Frapporti <effedue@gmail.com>",
   "license": "MIT",
-  "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fornace/pi-message-sidebar.git"
+  },
   "files": ["index.ts", "message-sidebar.ts", "src", "README.md", "CHANGELOG.md", "LICENSE"],
   "pi": {
     "extensions": ["./index.ts"]

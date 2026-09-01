@@ -34,6 +34,8 @@ ln -s ~/repos/pi-message-sidebar ~/.pi/agent/extensions/message-sidebar
 ### Pi package
 
 ```bash
+pi install npm:pi-message-sidebar
+# or from git
 pi install git:github.com/Fornace/pi-message-sidebar
 ```
 
