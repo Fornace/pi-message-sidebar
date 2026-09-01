@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+> First release published from GitHub Actions with npm trusted publishing (OIDC); no tokens involved.
+
+
 ## 1.1.0
 
 > Pi 0.84.4: transcript overlap during TUI mode switches and narrow-pane width failures are resolved by mode-specific reserved layouts.
