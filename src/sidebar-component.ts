@@ -134,7 +134,7 @@ export class SidebarComponent implements Component {
     if (signature === this.cachedSignature) return this.cachedLines;
 
     const fullHeader = this.renderHeader(safeWidth);
-    const headerRows = this.messages.length > 0 && targetHeight === 1 ? 0 : targetHeight <= 5 ? 1 : 2;
+    const headerRows = this.messages.length > 0 && targetHeight === 1 ? 0 : 1;
     const header = fullHeader.slice(0, Math.min(headerRows, targetHeight));
     const available = Math.max(0, targetHeight - header.length);
     // At tiny heights, keep one chronological message row before allocating dock chrome.
@@ -146,7 +146,7 @@ export class SidebarComponent implements Component {
       this.options.getThinkingLevel(),
       this.focused,
       this.options.getCmuxContext,
-      Math.min(4, Math.max(0, available - messageReserve)),
+      Math.min(5, Math.max(0, available - messageReserve)),
     );
     const bodyHeight = Math.max(0, targetHeight - header.length - dock.length);
     const result = [...header, ...this.renderBody(safeWidth, bodyHeight), ...dock];
@@ -165,14 +165,10 @@ export class SidebarComponent implements Component {
   private renderHeader(width: number): string[] {
     const position = this.selectedIndex() + 1;
     const count = this.messages.length;
-    const location = count > 0 ? `${position}/${count}` : "0";
     const selected = this.messages[this.selectedIndex()];
-    const detail = selected
-      ? `${this.focused ? "Selected" : "Current"} #${selected.index} ${formatTime(selected.timestamp)}`
-      : "User prompts";
+    const detail = selected ? ` ${FG_FAINT}·${RST} ${FG_DIM}#${selected.index} ${formatTime(selected.timestamp)}${RST}` : "";
     return [
-      fillRow(` ${BOLD}${FG_BRIGHT}Messages${RST} ${FG_FAINT}${location}${RST}`, width, BG_HDR),
-      fillRow(` ${FG_DIM}${detail}${RST}`, width, BG),
+      fillRow(` ${BOLD}${FG_BRIGHT}Messages${RST} ${FG_FAINT}${count > 0 ? `${position}/${count}` : "0"}${RST}${detail}`, width, BG_HDR),
     ];
   }
 
@@ -241,10 +237,20 @@ export class SidebarComponent implements Component {
     const selected = message.id === this.selectedId;
     const background = selected ? BG_SEL : BG;
     const arrow = selected && this.focused ? `${FG_ACC}›${RST}` : " ";
-    if (!this.expandedIds.has(message.id) || maxRows <= 1) {
+    if (!this.expandedIds.has(message.id)) {
+      // Collapsed preview: up to two wrapped lines so real prompts stay readable.
       const prefix = ` ${arrow} `;
-      const text = truncateToWidth(message.text.replace(/\s+/g, " "), Math.max(0, width - visibleWidth(prefix)), "…");
-      return [fillRow(`${prefix}${selected ? FG_BRIGHT : FG_NORM}${text}${RST}`, width, background)];
+      const textWidth = Math.max(1, width - visibleWidth(prefix));
+      const wrapped = wrapText(message.text, textWidth);
+      const rows = Math.max(1, Math.min(2, maxRows));
+      const shown = wrapped.slice(0, rows);
+      if (wrapped.length > shown.length && shown.length > 0) {
+        const overflow = shown[shown.length - 1]!;
+        shown[shown.length - 1] = truncateToWidth(overflow, Math.max(1, textWidth - 1), "") + "…";
+      }
+      return shown.map((line, position) =>
+        fillRow(`${position === 0 ? prefix : "   "}${selected ? FG_BRIGHT : FG_NORM}${line}${RST}`, width, background),
+      );
     }
 
     const number = `${FG_FAINT}#${message.index}${RST}`;

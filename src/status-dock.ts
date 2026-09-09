@@ -99,7 +99,7 @@ function goalStatus(goal: ThreadGoal): { icon: string; color: string; label: str
   }
 }
 
-function renderGoal(width: number, goal: ThreadGoal): string[] {
+function renderGoal(width: number, goal: ThreadGoal, objectiveLines: number): string[] {
   const status = goalStatus(goal);
   const budget = goal.tokenBudget
     ? `${formatTokens(goal.usage.tokensUsed)}/${formatTokens(goal.tokenBudget)}`
@@ -108,7 +108,7 @@ function renderGoal(width: number, goal: ThreadGoal): string[] {
   const metadata = `${status.color}${status.icon} ${status.label}${RST} ${overBudget ? FG_ERR : FG_MID}${budget}${RST} ${FG_FAINT}${formatDuration(goal.usage.activeSeconds)}${RST}`;
   const objective = wrapText(goal.objective, Math.max(1, width - 4));
   const lines = [fillRow(` ${metadata}`, width, BG)];
-  if (objective[0]) lines.push(fillRow(`   ${FG_BRIGHT}${objective[0]}${RST}`, width, BG));
+  for (const line of objective.slice(0, Math.max(0, objectiveLines))) lines.push(fillRow(`   ${FG_BRIGHT}${line}${RST}`, width, BG));
   return lines;
 }
 
@@ -124,15 +124,13 @@ function renderWorkspace(width: number, ctx: ExtensionContext, footerData: Reado
 }
 
 function renderCmux(width: number, cmux: CmuxContext): string {
-  const prefix = ` ${FG_FAINT}cmux${RST} `;
-  const available = Math.max(0, width - visibleWidth(prefix));
-  const surfaceText = cmux.surfaceRef ?? "";
-  const surface = truncateToWidth(surfaceText, available, "");
+  // Operational identity first: the surface ref never truncates away.
+  const surface = cmux.surfaceRef ?? "";
   const separator = surface ? ` ${FG_FAINT}·${RST} ` : "";
-  const titleBudget = Math.max(0, available - visibleWidth(separator) - visibleWidth(surface));
-  const titleText = cmux.workspaceTitle ?? cmux.workspaceRef ?? "cmux";
+  const titleText = cmux.workspaceTitle ?? cmux.workspaceRef ?? "";
+  const titleBudget = Math.max(0, width - 2 - visibleWidth(surface) - visibleWidth(separator));
   const title = truncateToWidth(titleText, titleBudget, "…");
-  return fillRow(`${prefix}${FG_BRIGHT}${title}${RST}${separator}${FG_INFO}${surface}${RST}`, width, BG);
+  return fillRow(` ${FG_INFO}${surface}${RST}${separator}${FG_BRIGHT}${title}${RST}`, width, BG);
 }
 
 function renderRuntime(width: number, ctx: ExtensionContext, footerData: ReadonlyFooterDataProvider | null, thinkingLevel: string, usage: Usage): string | null {
@@ -165,9 +163,9 @@ export function renderStatusDock(
   thinkingLevel: string,
   focused: boolean,
   getCmuxContext: () => CmuxContext | null,
-  maxRows = 4,
+  maxRows = 5,
 ): string[] {
-  const limit = Math.max(0, Math.min(4, Math.floor(maxRows)));
+  const limit = Math.max(0, Math.min(5, Math.floor(maxRows)));
   if (limit === 0) return [];
   const hint = fillRow(
     ` ${FG_DIM}${focused ? "↑↓ move  Enter open  c copy  Esc close" : "Ctrl+Shift+H focus"}${RST}`,
@@ -179,18 +177,31 @@ export function renderStatusDock(
   const usage = computeUsage(ctx);
   const goal = readSessionGoal(ctx);
   const cmux = getCmuxContext();
-  const rows: string[] = [];
 
-  // A cmux surface reference is operational identity. Keep it ahead of optional
-  // title, runtime, and status text so truncation cannot discard it.
-  if (cmux) rows.push(renderCmux(width, cmux));
-  if (goal) rows.push(...renderGoal(width, goal));
-  if (!cmux && !goal) rows.push(renderWorkspace(width, ctx, footerData));
-  const runtime = renderRuntime(width, ctx, footerData, thinkingLevel, usage);
-  if (runtime) rows.push(runtime);
-  if (!goal) {
+  // Priority order: identity, goal status, first objective line, runtime, then
+  // the second objective line. Truncation drops the least important rows last.
+  const rows: string[] = [];
+  const push = (line: string | string[] | null): boolean => {
+    if (!line) return true;
+    const added = Array.isArray(line) ? line : [line];
+    if (rows.length + added.length > limit - 1) return false;
+    rows.push(...added);
+    return true;
+  };
+  if (cmux) push(renderCmux(width, cmux));
+  else if (!goal) push(renderWorkspace(width, ctx, footerData));
+  if (goal) {
+    if (!push(renderGoal(width, goal, 1)) && rows.length + 1 <= limit - 1) {
+      // Degrade to goal status without the objective line before dropping it entirely.
+      rows.push(...renderGoal(width, goal, 0));
+    }
+    const runtime = renderRuntime(width, ctx, footerData, thinkingLevel, usage);
+    if (!push(runtime)) return [...rows.slice(0, limit - 1), hint];
+    push(renderGoal(width, goal, 2).slice(2));
+  } else {
+    push(renderRuntime(width, ctx, footerData, thinkingLevel, usage));
     const status = validExtensionStatuses(footerData)[0];
-    if (status) rows.push(row(width, "stat", `${FG_MID}${status}${RST}`));
+    if (status) push(row(width, "stat", `${FG_MID}${status}${RST}`));
   }
 
   return [...rows.slice(0, limit - 1), hint];

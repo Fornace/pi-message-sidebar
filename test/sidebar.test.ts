@@ -105,8 +105,9 @@ test("collapsed rows spend width on message text and keep metadata off body rows
   const bodyRow = lines.find((line) => line.includes("unique-message-0"));
   assert.ok(bodyRow);
   assert.match(bodyRow, /unique-message-0 with enough text/);
-  // Metadata for the selected message lives in the header, not on every body row.
-  assert.match(lines[1]!, /#1 12:00/);
+  // Position and selected timestamp live in the single header row, not on body rows.
+  assert.match(lines[0]!, /Messages 1\/1/);
+  assert.match(lines[0]!, /#1 12:00/);
 });
 
 test("expanded messages stay bounded", () => {
@@ -169,8 +170,10 @@ test("short histories top-align and use blank rows only below messages", () => {
   const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
   const first = clean.findIndex((line) => line.includes("unique-message-0"));
   const second = clean.findIndex((line) => line.includes("unique-message-1"));
-  assert.equal(first, 2);
+  // Single header row, first message underneath, two-line preview wraps before the next.
+  assert.equal(first, 1);
   assert.equal(second, 3);
+  assert.match(clean[2]!, /chronological row/);
 });
 
 test("tiny heights preserve a message whenever one row exists", () => {

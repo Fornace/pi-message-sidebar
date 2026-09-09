@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0
+
+> Readability pass driven by a live populated PTY audit: less cropping, more signal per row.
+
+- Collapsed message previews now use up to two wrapped lines instead of one clipped line.
+- Single header row: `Messages 5/5 · #5 01:26` replaces the two-row header.
+- Goal recap shows the objective on its own line(s) again, with a second line when dock space allows.
+- cmux row drops the label and leads with the surface ref (`surface:38 · title`), so operational identity never truncates away.
+- Status dock is priority-ordered (identity, goal status, objective, runtime, hint) and degrades to goal-status-only before dropping the goal.
+- Dock budget raised to five rows at normal heights; tiny-height behavior unchanged.
+
+
 ## 1.5.0
 
 - Replaced selected/newest pinning with a row-aware contiguous chronological viewport.
