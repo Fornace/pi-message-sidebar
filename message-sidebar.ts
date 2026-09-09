@@ -5,6 +5,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { isViewportTUI, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import type { CmuxContext } from "./src/cmux.ts";
+import { resolveCmuxContext } from "./src/cmux.ts";
 import { isSidebarVisible } from "./src/constants.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
 import { SidebarComponent, type UserMessage } from "./src/sidebar-component.ts";
@@ -61,6 +63,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   let tui: TUI | null = null;
   let cachedContext: ExtensionContext | null = null;
   let footerData: ReadonlyFooterDataProvider | null = null;
+  let cmuxContext: CmuxContext | null = null;
   let refreshQueued = false;
 
   const scheduleRefresh = (ctx: ExtensionContext | null = cachedContext) => {
@@ -91,6 +94,10 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     cachedContext = ctx;
+    void resolveCmuxContext().then((resolved) => {
+      cmuxContext = resolved;
+      scheduleRefresh(ctx);
+    });
     ctx.ui.setWidget(
       "message-sidebar-layout",
       (currentTui) => {
@@ -100,6 +107,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           ctx,
           getFooterData: () => footerData,
           getThinkingLevel: () => pi.getThinkingLevel(),
+          getCmuxContext: () => cmuxContext,
           messages: collectUserMessages(ctx),
         });
         return new SidebarLayoutBridge(currentTui, sidebar);
@@ -140,6 +148,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
     tui = null;
     cachedContext = null;
     footerData = null;
+    cmuxContext = null;
   });
 
   pi.registerShortcut("ctrl+shift+h", {
@@ -155,6 +164,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("turn_end", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("agent_end", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("agent_settled", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("model_select", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("thinking_level_select", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("session_compact", (_event, ctx) => scheduleRefresh(ctx));

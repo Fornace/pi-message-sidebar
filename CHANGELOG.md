@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+> Live goal tracking and cmux session context in the status dock.
+
+- Added a goal card to the status dock: when pi-codex-goal is active, the dock shows the objective (two wrapped lines), status glyph, token budget progress, and elapsed time, kept current across goal set/usage/clear entries.
+- Added cmux awareness: inside cmux, the `sess` row shows the workspace title (or ref) and surface ref instead of the session file datetime; outside cmux the previous format is kept.
+- Memoized session usage aggregation and goal reconstruction so dock refreshes stay O(1) for unchanged sessions.
+- Added refresh triggers for `agent_settled` so goal continuation updates surface without a turn boundary.
+- Aligned the header rule with the panel width.
+
 ## 1.1.1
 
 > First release published from GitHub Actions with npm trusted publishing (OIDC); no tokens involved.

@@ -43,11 +43,39 @@ test("sidebar lines fit at every supported component width", () => {
     text: `Message ${index + 1} with a long path /Users/example/repository/src/component-${index}.ts and wide text 你好世界`,
   }));
   const ctx = fakeContext(messages);
+  (ctx as any).sessionManager.getBranch = () => [
+    ...messages.map((message) => ({
+      type: "message",
+      id: message.id,
+      timestamp: message.timestamp,
+      message: { role: "user", content: message.text },
+    })),
+    {
+      type: "custom",
+      customType: "pi-codex-goal",
+      data: {
+        version: 1,
+        kind: "set",
+        source: "tool",
+        goal: {
+          goalId: "g1",
+          objective: "Upgrade the pi-message-sidebar extension with a live goal recap, cmux session context, and a full debug and beautification pass while keeping every line within the dock width",
+          status: "active",
+          tokenBudget: 3_000_000,
+          tokensUsed: 1_234_567,
+          activeSeconds: 2_460,
+          createdAt: 100,
+          updatedAt: 200,
+        },
+      },
+    },
+  ];
   const sidebar = new SidebarComponent({
     tui: fakeTui(),
     ctx,
     messages,
     getThinkingLevel: () => "xhigh",
+    getCmuxContext: () => ({ workspaceTitle: "π - imagineer-standalone with a very long title", workspaceRef: "workspace:7", surfaceRef: "surface:38" }),
     getFooterData: () => ({
       getGitBranch: () => "feature/a-very-long-branch-name",
       getExtensionStatuses: () => new Map([["goal", "A long extension status that needs clipping"]]),
@@ -76,6 +104,7 @@ test("expanded messages stay bounded", () => {
     ctx: fakeContext(messages),
     messages,
     getThinkingLevel: () => "high",
+    getCmuxContext: () => null,
     getFooterData: () => null,
   });
   sidebar.setFocused(true);

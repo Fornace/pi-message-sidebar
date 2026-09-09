@@ -38,6 +38,15 @@ export function formatTime(timestamp: string): string {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+export function formatDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours}h ${String(rest).padStart(2, "0")}m` : `${hours}h`;
+}
+
 export function sanitizeStatusText(text: string): string {
   return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
 }

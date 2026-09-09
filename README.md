@@ -5,6 +5,8 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 ## Features
 
 - Fixed 42-column panel on the right
+- Live goal card: objective, status, token budget, and elapsed time from pi-codex-goal entries
+- cmux session context: workspace title and surface ref replace the session file datetime inside cmux
 - Main transcript and editor render in their own reserved width
 - Native side-by-side layout in fullscreen TUI mode
 - Regular-mode compositor that reserves the same width in scrollback mode
@@ -55,7 +57,9 @@ The sidebar appears automatically in interactive mode when the terminal is at le
 - `index.ts` is the auto-discovered extension entrypoint.
 - `src/layout.ts` reserves a real horizontal region in fullscreen mode and composes an equivalent region in regular mode.
 - `src/sidebar-component.ts` owns message navigation and bounded rendering.
-- `src/status-dock.ts` renders session, model, context, cost, and extension status data.
+- `src/status-dock.ts` renders session, model, context, cost, goal, and extension status data.
+- `src/goal.ts` reconstructs the active pi-codex-goal from session entries.
+- `src/cmux.ts` resolves the cmux workspace title and surface ref once per session.
 - `src/style.ts` provides ANSI-safe row filling and width helpers.
 - `src/constants.ts` owns responsive layout thresholds.
 

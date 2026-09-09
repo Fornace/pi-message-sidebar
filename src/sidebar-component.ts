@@ -7,6 +7,8 @@ import { basename } from "node:path";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { GAP_WINDOW, PINNED_COUNT, SIDEBAR_WIDTH } from "./constants.ts";
+import type { CmuxContext } from "./cmux.ts";
+import { readSessionGoal } from "./goal.ts";
 import { assertLinesFit } from "./layout.ts";
 import { renderStatusDock } from "./status-dock.ts";
 import {
@@ -36,6 +38,7 @@ type SidebarOptions = {
   ctx: ExtensionContext;
   getFooterData: () => ReadonlyFooterDataProvider | null;
   getThinkingLevel: () => string;
+  getCmuxContext: () => CmuxContext | null;
   messages: UserMessage[];
 };
 
@@ -118,6 +121,7 @@ export class SidebarComponent {
       this.options.getFooterData(),
       this.options.getThinkingLevel(),
       this.focused,
+      this.options.getCmuxContext,
     );
     while (lines.length < targetHeight - dock.length) lines.push(fillRow(" ", safeWidth, BG));
     const bodyLimit = Math.max(0, targetHeight - dock.length);
@@ -136,7 +140,7 @@ export class SidebarComponent {
   private renderHeader(width: number): string[] {
     const icon = this.focused ? `${FG_ACC}●${RST}` : `${FG_DIM}○${RST}`;
     const mode = this.focused ? `${FG_ACC}●${RST} ${FG_MID}focused${RST}` : `${FG_DIM}passive${RST}`;
-    const separator = `${FG_DIM}${"─".repeat(Math.max(0, width - 4))}${RST}`;
+    const separator = `${FG_DIM}${"─".repeat(Math.max(0, width - 2))}${RST}`;
     return [
       fillRow(" ", width, BG_HDR),
       fillRow(` ${icon} ${BOLD}${FG_BRIGHT}Messages${RST}${FG_DIM} ${this.messages.length}${RST}  ${mode}`, width, BG_HDR),
@@ -197,6 +201,8 @@ export class SidebarComponent {
   private signature(width: number, height: number): string {
     const usage = this.options.ctx.getContextUsage?.();
     const statuses = this.options.getFooterData()?.getExtensionStatuses();
+    const goal = readSessionGoal(this.options.ctx);
+    const cmux = this.options.getCmuxContext();
     return JSON.stringify({
       width,
       height,
@@ -206,6 +212,8 @@ export class SidebarComponent {
       thinking: this.options.getThinkingLevel(),
       usage,
       statuses: statuses ? [...statuses.entries()] : [],
+      goal: goal ? `${goal.goalId}:${goal.status}:${goal.tokensUsed}:${goal.activeSeconds}:${goal.updatedAt}` : null,
+      cmux: cmux ? `${cmux.workspaceTitle}:${cmux.surfaceRef}` : null,
     });
   }
 
