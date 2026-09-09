@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.5.0
 
 - Replaced selected/newest pinning with a row-aware contiguous chronological viewport.
 - Top-aligned short histories and preserved selection, expansion, viewport anchor, and follow-tail state by message ID.
