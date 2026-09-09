@@ -15,6 +15,12 @@ type BranchEntry = { type?: string; customType?: string; data?: unknown };
 
 const GOAL_ENTRY_TYPE = "pi-codex-goal";
 
+type GoalEntrySource = "command" | "tool" | "runtime";
+
+function isGoalEntrySource(value: unknown): value is GoalEntrySource {
+  return value === "command" || value === "tool" || value === "runtime";
+}
+
 function isThreadGoal(value: unknown): value is RawGoal {
   const goal = value as RawGoal | null;
   if (!goal || typeof goal !== "object") return false;
@@ -46,10 +52,10 @@ export function readThreadGoal(entries: Iterable<BranchEntry>): ThreadGoal | nul
   for (const entry of entries) {
     if (entry.type !== "custom" || entry.customType !== GOAL_ENTRY_TYPE) continue;
     const data = entry.data as Record<string, unknown> | null;
-    if (!data || typeof data !== "object" || data.version !== 1) continue;
-    if (data.kind === "clear") {
+    if (!data || typeof data !== "object" || data.version !== 1 || typeof data.at !== "number") continue;
+    if (data.kind === "clear" && isGoalEntrySource(data.source) && (data.clearedGoalId === null || typeof data.clearedGoalId === "string")) {
       goal = null;
-    } else if (data.kind === "set" && isThreadGoal(data.goal)) {
+    } else if (data.kind === "set" && isGoalEntrySource(data.source) && isThreadGoal(data.goal)) {
       const raw = data.goal as RawGoal;
       goal = {
         goalId: raw.goalId,
@@ -61,7 +67,7 @@ export function readThreadGoal(entries: Iterable<BranchEntry>): ThreadGoal | nul
         createdAt: raw.createdAt,
         updatedAt: raw.updatedAt,
       };
-    } else if (data.kind === "usage" && goal) {
+    } else if (data.kind === "usage" && data.source === "runtime" && goal) {
       const usage = data.usage as { tokensUsed?: number; activeSeconds?: number } | undefined;
       const updatedAt = data.updatedAt;
       const status = data.status;

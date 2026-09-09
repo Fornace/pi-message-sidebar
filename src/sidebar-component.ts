@@ -6,7 +6,7 @@ import {
 import { basename } from "node:path";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { GAP_WINDOW, PINNED_COUNT, SIDEBAR_WIDTH } from "./constants.ts";
+import { SIDEBAR_WIDTH } from "./constants.ts";
 import type { CmuxContext } from "./cmux.ts";
 import { readSessionGoal } from "./goal.ts";
 import { assertLinesFit } from "./layout.ts";
@@ -42,10 +42,13 @@ type SidebarOptions = {
   messages: UserMessage[];
 };
 
-export class SidebarComponent {
+type MessageRows = { index: number; lines: string[] };
+
+export class SidebarComponent implements Component {
   private focused = false;
-  private selected = 0;
-  private expanded = new Set<number>();
+  private selectedId: string | null;
+  private readonly expandedIds = new Set<string>();
+  private followTail = true;
   private messages: UserMessage[];
   private version = 0;
   private restoreFocus: Component | null = null;
@@ -54,10 +57,13 @@ export class SidebarComponent {
 
   constructor(private readonly options: SidebarOptions) {
     this.messages = options.messages;
-    this.selected = Math.max(0, this.messages.length - 1);
+    this.selectedId = this.messages.at(-1)?.id ?? null;
   }
 
   isFocused(): boolean { return this.focused; }
+  getSelectedMessageId(): string | null { return this.selectedId; }
+  isFollowingTail(): boolean { return this.followTail; }
+  isExpanded(messageId: string): boolean { return this.expandedIds.has(messageId); }
 
   setFocused(focused: boolean): void {
     if (this.focused === focused) return;
@@ -76,8 +82,17 @@ export class SidebarComponent {
   }
 
   updateMessages(messages: UserMessage[]): void {
+    const previousId = this.selectedId;
     this.messages = messages;
-    this.selected = Math.min(this.selected, Math.max(0, messages.length - 1));
+    const ids = new Set(messages.map((message) => message.id));
+    for (const id of this.expandedIds) if (!ids.has(id)) this.expandedIds.delete(id);
+
+    if (this.followTail || !previousId || !ids.has(previousId)) {
+      this.selectedId = messages.at(-1)?.id ?? null;
+      this.followTail = true;
+    } else {
+      this.selectedId = previousId;
+    }
     this.refresh();
   }
 
@@ -89,32 +104,37 @@ export class SidebarComponent {
   handleInput(data: string): void {
     if (matchesKey(data, "escape")) return this.setFocused(false);
     if (matchesKey(data, "c")) { void this.copySessionPath(); return; }
-    if (matchesKey(data, "up")) this.selected = Math.max(0, this.selected - 1);
-    else if (matchesKey(data, "down")) this.selected = Math.min(this.messages.length - 1, this.selected + 1);
-    else if (matchesKey(data, "pageUp")) this.selected = Math.max(0, this.selected - 10);
-    else if (matchesKey(data, "pageDown")) this.selected = Math.min(this.messages.length - 1, this.selected + 10);
-    else if (matchesKey(data, "home")) this.selected = 0;
-    else if (matchesKey(data, "end")) this.selected = Math.max(0, this.messages.length - 1);
+    const current = this.selectedIndex();
+    let target: number | null = null;
+    if (matchesKey(data, "up")) target = Math.max(0, current - 1);
+    else if (matchesKey(data, "down")) target = Math.min(this.messages.length - 1, current + 1);
+    else if (matchesKey(data, "pageUp")) target = Math.max(0, current - 10);
+    else if (matchesKey(data, "pageDown")) target = Math.min(this.messages.length - 1, current + 10);
+    else if (matchesKey(data, "home")) target = 0;
+    else if (matchesKey(data, "end")) target = Math.max(0, this.messages.length - 1);
     else if (matchesKey(data, "return") || matchesKey(data, "enter") || data === " ") {
-      if (this.expanded.has(this.selected)) this.expanded.delete(this.selected);
-      else this.expanded.add(this.selected);
+      if (!this.selectedId) return;
+      if (this.expandedIds.has(this.selectedId)) this.expandedIds.delete(this.selectedId);
+      else this.expandedIds.add(this.selectedId);
+      this.refresh();
+      return;
     } else return;
+
+    if (target < 0 || !this.messages[target]) return;
+    this.selectedId = this.messages[target].id;
+    this.followTail = target === this.messages.length - 1;
     this.refresh();
   }
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, Math.min(SIDEBAR_WIDTH, width));
-    const targetHeight = Math.max(15, this.options.tui.terminal.rows);
+    const targetHeight = Math.max(1, this.options.tui.terminal.rows);
     const signature = this.signature(safeWidth, targetHeight);
     if (signature === this.cachedSignature) return this.cachedLines;
 
-    const lines = this.renderHeader(safeWidth);
-    if (this.messages.length === 0) {
-      lines.push(fillRow(" No messages yet", safeWidth, BG));
-    } else {
-      lines.push(...this.renderMessages(safeWidth));
-    }
-
+    const renderedHeader = this.renderHeader(safeWidth);
+    const header = renderedHeader.slice(0, Math.min(renderedHeader.length, targetHeight));
+    const maxDockRows = Math.max(0, targetHeight - header.length);
     const dock = renderStatusDock(
       safeWidth,
       this.options.ctx,
@@ -122,11 +142,14 @@ export class SidebarComponent {
       this.options.getThinkingLevel(),
       this.focused,
       this.options.getCmuxContext,
+      maxDockRows,
     );
-    while (lines.length < targetHeight - dock.length) lines.push(fillRow(" ", safeWidth, BG));
-    const bodyLimit = Math.max(0, targetHeight - dock.length);
-    const result = [...lines.slice(0, bodyLimit), ...dock].slice(0, targetHeight);
+    const bodyHeight = Math.max(0, targetHeight - header.length - dock.length);
+    const result = [...header, ...this.renderBody(safeWidth, bodyHeight), ...dock];
     assertLinesFit(result, safeWidth, "sidebar");
+    if (result.length !== targetHeight) {
+      throw new Error(`sidebar height mismatch (${result.length} != ${targetHeight})`);
+    }
     this.cachedSignature = signature;
     this.cachedLines = result;
     return result;
@@ -138,38 +161,74 @@ export class SidebarComponent {
   }
 
   private renderHeader(width: number): string[] {
-    const icon = this.focused ? `${FG_ACC}●${RST}` : `${FG_DIM}○${RST}`;
-    const mode = this.focused ? `${FG_ACC}●${RST} ${FG_MID}focused${RST}` : `${FG_DIM}passive${RST}`;
-    const separator = `${FG_DIM}${"─".repeat(Math.max(0, width - 2))}${RST}`;
+    const focus = this.focused ? `${FG_ACC}focused${RST}` : `${FG_DIM}passive${RST}`;
+    const tail = this.followTail ? `${FG_DIM}tail${RST}` : `${FG_MID}browsing${RST}`;
     return [
-      fillRow(" ", width, BG_HDR),
-      fillRow(` ${icon} ${BOLD}${FG_BRIGHT}Messages${RST}${FG_DIM} ${this.messages.length}${RST}  ${mode}`, width, BG_HDR),
-      fillRow(" ", width, BG_HDR),
-      fillRow(` ${separator}`, width, BG),
+      fillRow(` ${BOLD}${FG_BRIGHT}Messages${RST} ${FG_FAINT}${this.messages.length}${RST}`, width, BG_HDR),
+      fillRow(` ${focus}${FG_FAINT} · ${RST}${tail}`, width, BG),
     ];
   }
 
-  private renderMessages(width: number): string[] {
-    const result: string[] = [];
-    let previous = -1;
-    for (const index of this.visibleIndices()) {
-      if (index > previous + 1 && previous >= 0) {
-        result.push(fillRow(`     ${FG_DIM}··· ${index - previous - 1} more ···${RST}`, width, BG));
-      }
-      result.push(...this.renderMessage(index, width));
-      previous = index;
+  private renderBody(width: number, height: number): string[] {
+    if (height === 0) return [];
+    if (this.messages.length === 0) {
+      return this.padTop([fillRow(` ${FG_DIM}No messages yet${RST}`, width, BG)], height, width);
     }
-    return result;
+
+    const selected = this.selectedIndex();
+    const newest = this.messages.length - 1;
+    const selectedBudget = Math.max(1, height - (selected === newest ? 0 : height >= 3 ? 2 : 1));
+    const groups = new Map<number, MessageRows>();
+    groups.set(selected, { index: selected, lines: this.renderMessage(selected, width, selectedBudget) });
+    if (selected !== newest && height >= 2) {
+      groups.set(newest, { index: newest, lines: this.renderMessage(newest, width, 1) });
+    }
+
+    const candidates = Array.from({ length: this.messages.length }, (_, index) => index)
+      .filter((index) => !groups.has(index))
+      .sort((a, b) => {
+        const aDistance = Math.min(Math.abs(a - selected), newest - a);
+        const bDistance = Math.min(Math.abs(b - selected), newest - b);
+        return aDistance - bDistance || b - a;
+      });
+    for (const index of candidates) {
+      const group = { index, lines: this.renderMessage(index, width) };
+      groups.set(index, group);
+      if (this.composeGroups(groups, width, true).length > height) groups.delete(index);
+    }
+
+    let lines = this.composeGroups(groups, width, true);
+    if (lines.length > height) lines = this.composeGroups(groups, width, false);
+    return this.padTop(lines, height, width);
   }
 
-  private renderMessage(index: number, width: number): string[] {
+  private composeGroups(groups: Map<number, MessageRows>, width: number, showGaps: boolean): string[] {
+    const ordered = [...groups.values()].sort((a, b) => a.index - b.index);
+    const lines: string[] = [];
+    let previous = -1;
+    for (const group of ordered) {
+      if (showGaps && previous >= 0 && group.index > previous + 1) {
+        lines.push(fillRow(` ${FG_FAINT}··· ${group.index - previous - 1} hidden${RST}`, width, BG));
+      }
+      lines.push(...group.lines);
+      previous = group.index;
+    }
+    return lines;
+  }
+
+  private padTop(lines: string[], height: number, width: number): string[] {
+    const padding = Array.from({ length: Math.max(0, height - lines.length) }, () => fillRow(" ", width, BG));
+    return [...padding, ...lines];
+  }
+
+  private renderMessage(index: number, width: number, maxRows = 10): string[] {
     const message = this.messages[index]!;
-    const selected = index === this.selected;
+    const selected = message.id === this.selectedId;
     const background = selected ? BG_SEL : BG;
-    const arrow = selected && this.focused ? `${FG_ACC}▸${RST}` : " ";
+    const arrow = selected && this.focused ? `${FG_ACC}›${RST}` : " ";
     const number = `${FG_FAINT}${String(message.index).padStart(2)}${RST}`;
     const time = `${FG_TIME}${formatTime(message.timestamp)}${RST}`;
-    if (!this.expanded.has(index)) {
+    if (!this.expandedIds.has(message.id) || maxRows <= 1) {
       const prefix = ` ${arrow}${number} ${time} `;
       const text = truncateToWidth(message.text.replace(/\s+/g, " "), Math.max(0, width - visibleWidth(prefix)), "…");
       return [fillRow(`${prefix}${selected ? FG_BRIGHT : FG_NORM}${text}${RST}`, width, background)];
@@ -177,25 +236,22 @@ export class SidebarComponent {
 
     const lines = [fillRow(` ${arrow}${number} ${time}`, width, background)];
     const wrapped = wrapText(message.text, Math.max(1, width - 4));
-    for (const line of wrapped.slice(0, 8)) lines.push(fillRow(`   ${FG_EXP}${line}${RST}`, width, background));
-    if (wrapped.length > 8) {
-      lines.push(fillRow(`   ${FG_DIM}${DIM}…+${wrapped.length - 8} lines${RST}`, width, background));
+    const contentRows = Math.max(0, maxRows - 2);
+    for (const line of wrapped.slice(0, contentRows)) {
+      lines.push(fillRow(`   ${FG_EXP}${line}${RST}`, width, background));
     }
-    lines.push(fillRow(" ", width, background));
+    if (wrapped.length > contentRows && lines.length < maxRows) {
+      lines.push(fillRow(`   ${FG_DIM}${DIM}…+${wrapped.length - contentRows} lines${RST}`, width, background));
+    } else if (lines.length < maxRows) {
+      lines.push(fillRow(" ", width, background));
+    }
     return lines;
   }
 
-  private visibleIndices(): number[] {
-    const total = this.messages.length;
-    if (total <= PINNED_COUNT * 2 + 1) return Array.from({ length: total }, (_, index) => index);
-    const indices = new Set<number>();
-    for (let i = 0; i < PINNED_COUNT; i++) indices.add(i);
-    for (let i = total - PINNED_COUNT; i < total; i++) indices.add(i);
-    if (this.selected >= PINNED_COUNT && this.selected < total - PINNED_COUNT) {
-      const start = Math.max(PINNED_COUNT, Math.min(this.selected - 1, total - PINNED_COUNT - GAP_WINDOW));
-      for (let i = start; i < start + GAP_WINDOW; i++) indices.add(i);
-    }
-    return [...indices].sort((a, b) => a - b);
+  private selectedIndex(): number {
+    if (this.messages.length === 0) return -1;
+    const index = this.messages.findIndex((message) => message.id === this.selectedId);
+    return index >= 0 ? index : this.messages.length - 1;
   }
 
   private signature(width: number, height: number): string {
@@ -207,13 +263,12 @@ export class SidebarComponent {
       width,
       height,
       version: this.version,
-      messages: this.messages.length,
       model: this.options.ctx.model?.id,
       thinking: this.options.getThinkingLevel(),
       usage,
       statuses: statuses ? [...statuses.entries()] : [],
       goal: goal ? `${goal.goalId}:${goal.status}:${goal.tokensUsed}:${goal.activeSeconds}:${goal.updatedAt}` : null,
-      cmux: cmux ? `${cmux.workspaceTitle}:${cmux.surfaceRef}` : null,
+      cmux: cmux ? `${cmux.workspaceTitle}:${cmux.workspaceRef}:${cmux.surfaceRef}` : null,
     });
   }
 

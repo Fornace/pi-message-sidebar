@@ -27,9 +27,9 @@ function fakeContext(messages: UserMessage[]) {
   } as never;
 }
 
-function fakeTui() {
+function fakeTui(rows = 24) {
   return {
-    terminal: { rows: 24, columns: 160 },
+    terminal: { rows, columns: 160 },
     requestRender() {},
     setFocus() {},
   } as never;
@@ -110,4 +110,94 @@ test("expanded messages stay bounded", () => {
   sidebar.handleInput("\r");
   const lines = sidebar.render(35);
   assert.ok(lines.every((line) => visibleWidth(line) <= 35));
+});
+
+test("selection and expansion survive message insertion by ID", () => {
+  const messages: UserMessage[] = ["a", "b", "c"].map((id, index) => ({
+    id,
+    index: index + 1,
+    timestamp: new Date(2026, 8, 9, 12, index).toISOString(),
+    text: `message-${id}`,
+  }));
+  const sidebar = new SidebarComponent({
+    tui: fakeTui(),
+    ctx: fakeContext(messages),
+    messages,
+    getThinkingLevel: () => "high",
+    getCmuxContext: () => null,
+    getFooterData: () => null,
+  });
+
+  sidebar.setFocused(true);
+  sidebar.handleInput("\x1b[A");
+  sidebar.handleInput("\r");
+  assert.equal(sidebar.getSelectedMessageId(), "b");
+  assert.equal(sidebar.isExpanded("b"), true);
+  assert.equal(sidebar.isFollowingTail(), false);
+
+  sidebar.updateMessages([
+    { id: "x", index: 1, timestamp: messages[0]!.timestamp, text: "inserted" },
+    ...messages.map((message, index) => ({ ...message, index: index + 2 })),
+    { id: "d", index: 5, timestamp: new Date().toISOString(), text: "newest" },
+  ]);
+  assert.equal(sidebar.getSelectedMessageId(), "b");
+  assert.equal(sidebar.isExpanded("b"), true);
+  assert.equal(sidebar.isFollowingTail(), false);
+});
+
+test("follow-tail selects new messages until the user browses away", () => {
+  const initial: UserMessage[] = [{ id: "a", index: 1, timestamp: new Date().toISOString(), text: "alpha" }];
+  const sidebar = new SidebarComponent({
+    tui: fakeTui(),
+    ctx: fakeContext(initial),
+    messages: initial,
+    getThinkingLevel: () => "high",
+    getCmuxContext: () => null,
+    getFooterData: () => null,
+  });
+  sidebar.updateMessages([...initial, { id: "b", index: 2, timestamp: new Date().toISOString(), text: "bravo" }]);
+  assert.equal(sidebar.getSelectedMessageId(), "b");
+  sidebar.handleInput("\x1b[A");
+  sidebar.updateMessages([...initial, { id: "b", index: 2, timestamp: new Date().toISOString(), text: "bravo" }, { id: "c", index: 3, timestamp: new Date().toISOString(), text: "charlie" }]);
+  assert.equal(sidebar.getSelectedMessageId(), "a");
+});
+
+test("row-aware viewport always renders selected and newest message", () => {
+  const messages: UserMessage[] = Array.from({ length: 30 }, (_, index) => ({
+    id: `id-${index}`,
+    index: index + 1,
+    timestamp: new Date(2026, 8, 9, 12, index).toISOString(),
+    text: `unique-message-${index}`,
+  }));
+  const sidebar = new SidebarComponent({
+    tui: fakeTui(15),
+    ctx: fakeContext(messages),
+    messages,
+    getThinkingLevel: () => "high",
+    getCmuxContext: () => null,
+    getFooterData: () => null,
+  });
+  sidebar.setFocused(true);
+  sidebar.handleInput("\x1b[H");
+  const clean = sidebar.render(SIDEBAR_WIDTH).join("\n").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  assert.match(clean, /unique-message-0/);
+  assert.match(clean, /unique-message-29/);
+  assert.equal(sidebar.render(SIDEBAR_WIDTH).length, 15);
+});
+
+test("tiny terminal heights remain exact and non-crashing", () => {
+  const messages: UserMessage[] = [{ id: "a", index: 1, timestamp: new Date().toISOString(), text: "alpha" }];
+  for (const rows of [1, 2, 3, 8]) {
+    const sidebar = new SidebarComponent({
+      tui: fakeTui(rows),
+      ctx: fakeContext(messages),
+      messages,
+      getThinkingLevel: () => "high",
+      getCmuxContext: () => null,
+      getFooterData: () => null,
+    });
+    const lines = sidebar.render(SIDEBAR_WIDTH);
+    assert.equal(lines.length, rows);
+    assert.ok(lines.every((line) => visibleWidth(line) <= SIDEBAR_WIDTH));
+  }
 });
