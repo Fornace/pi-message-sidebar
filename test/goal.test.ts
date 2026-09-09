@@ -15,8 +15,7 @@ function setEntry(objective: string, goalId = "g1", status = "active", updatedAt
         objective,
         status,
         tokenBudget: 3_000_000,
-        tokensUsed: 0,
-        activeSeconds: 0,
+        usage: { tokensUsed: 0, activeSeconds: 0 },
         createdAt: 100,
         updatedAt,
       },
@@ -79,7 +78,7 @@ test("complete goal ignores later usage entries", () => {
   const done = readThreadGoal([
     setEntry("Ship it"),
     usageEntry("g1", 100, 10, 200, "budgetLimited"),
-    { type: "custom", customType: "pi-codex-goal", data: { version: 1, kind: "set", source: "tool", goal: { goalId: "g1", objective: "Ship it", status: "complete", tokenBudget: null, tokensUsed: 100, activeSeconds: 10, createdAt: 100, updatedAt: 400 } } },
+    { type: "custom", customType: "pi-codex-goal", data: { version: 1, kind: "set", source: "tool", goal: { goalId: "g1", objective: "Ship it", status: "complete", tokenBudget: null, usage: { tokensUsed: 100, activeSeconds: 10 }, createdAt: 100, updatedAt: 400 } } },
     usageEntry("g1", 200, 20, 500),
   ]);
   assert.equal(done?.status, "complete");

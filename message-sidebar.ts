@@ -125,8 +125,8 @@ export default function messageSidebar(pi: ExtensionAPI): void {
 
     ctx.ui.onTerminalInput((data) => {
       // Slash commands such as /goal mutate session entries without firing
-      // turn events; a coalesced refresh on any keystroke keeps the dock live.
-      scheduleRefresh();
+      // turn events. Refresh on submit, not every keystroke.
+      if (matchesKey(data, "return") || matchesKey(data, "enter")) scheduleRefresh();
       if (tui && !isSidebarVisible(tui.terminal.columns) && sidebar?.isFocused()) {
         sidebar.setFocused(false);
         tui.requestRender();
