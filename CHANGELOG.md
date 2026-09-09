@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Replaced selected/newest pinning with a row-aware contiguous chronological viewport.
+- Top-aligned short histories and preserved selection, expansion, viewport anchor, and follow-tail state by message ID.
+- Reduced the header to two compact rows and the normal status dock to at most four rows.
+- Removed collapsed-row ordinal and timestamp columns; metadata now appears only on expanded rows.
+- Preserved complete cmux surface refs by truncating workspace titles first.
+- Corrected tiny-height allocation so a message remains visible whenever one row is available.
+- Matched the nested pi-codex-goal usage schema, tightened goal status/value validation, refreshed live context independently of entry totals, and isolated usage caches per context.
+- Clarified that fullscreen is persistent while regular mode is a current-screen compositor under terminal-owned scrollback.
+
 ## 1.2.0
 
 > Live goal tracking and cmux session context in the status dock.

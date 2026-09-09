@@ -6,8 +6,8 @@ import {
 import { basename } from "node:path";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { SIDEBAR_WIDTH } from "./constants.ts";
 import type { CmuxContext } from "./cmux.ts";
+import { SIDEBAR_WIDTH } from "./constants.ts";
 import { readSessionGoal } from "./goal.ts";
 import { assertLinesFit } from "./layout.ts";
 import { renderStatusDock } from "./status-dock.ts";
@@ -42,8 +42,6 @@ type SidebarOptions = {
   messages: UserMessage[];
 };
 
-type MessageRows = { index: number; lines: string[] };
-
 export class SidebarComponent implements Component {
   private focused = false;
   private selectedId: string | null;
@@ -54,6 +52,7 @@ export class SidebarComponent implements Component {
   private restoreFocus: Component | null = null;
   private cachedSignature = "";
   private cachedLines: string[] = [];
+  private viewportStartId: string | null = null;
 
   constructor(private readonly options: SidebarOptions) {
     this.messages = options.messages;
@@ -73,9 +72,7 @@ export class SidebarComponent implements Component {
       this.options.tui.setFocus(this);
     } else {
       this.focused = false;
-      if ((this.options.tui as any).getFocusedComponent?.() === this) {
-        this.options.tui.setFocus(this.restoreFocus);
-      }
+      if ((this.options.tui as any).getFocusedComponent?.() === this) this.options.tui.setFocus(this.restoreFocus);
       this.restoreFocus = null;
     }
     this.refresh();
@@ -83,13 +80,16 @@ export class SidebarComponent implements Component {
 
   updateMessages(messages: UserMessage[]): void {
     const previousId = this.selectedId;
+    const previousStartId = this.viewportStartId;
     this.messages = messages;
     const ids = new Set(messages.map((message) => message.id));
     for (const id of this.expandedIds) if (!ids.has(id)) this.expandedIds.delete(id);
+    this.viewportStartId = previousStartId && ids.has(previousStartId) ? previousStartId : null;
 
     if (this.followTail || !previousId || !ids.has(previousId)) {
       this.selectedId = messages.at(-1)?.id ?? null;
       this.followTail = true;
+      this.viewportStartId = null;
     } else {
       this.selectedId = previousId;
     }
@@ -123,6 +123,7 @@ export class SidebarComponent implements Component {
     if (target < 0 || !this.messages[target]) return;
     this.selectedId = this.messages[target].id;
     this.followTail = target === this.messages.length - 1;
+    if (this.followTail) this.viewportStartId = null;
     this.refresh();
   }
 
@@ -132,9 +133,12 @@ export class SidebarComponent implements Component {
     const signature = this.signature(safeWidth, targetHeight);
     if (signature === this.cachedSignature) return this.cachedLines;
 
-    const renderedHeader = this.renderHeader(safeWidth);
-    const header = renderedHeader.slice(0, Math.min(renderedHeader.length, targetHeight));
-    const maxDockRows = Math.max(0, targetHeight - header.length);
+    const fullHeader = this.renderHeader(safeWidth);
+    const headerRows = this.messages.length > 0 && targetHeight === 1 ? 0 : targetHeight <= 5 ? 1 : 2;
+    const header = fullHeader.slice(0, Math.min(headerRows, targetHeight));
+    const available = Math.max(0, targetHeight - header.length);
+    // At tiny heights, keep one chronological message row before allocating dock chrome.
+    const messageReserve = this.messages.length > 0 && available > 0 ? 1 : 0;
     const dock = renderStatusDock(
       safeWidth,
       this.options.ctx,
@@ -142,14 +146,12 @@ export class SidebarComponent implements Component {
       this.options.getThinkingLevel(),
       this.focused,
       this.options.getCmuxContext,
-      maxDockRows,
+      Math.min(4, Math.max(0, available - messageReserve)),
     );
     const bodyHeight = Math.max(0, targetHeight - header.length - dock.length);
     const result = [...header, ...this.renderBody(safeWidth, bodyHeight), ...dock];
     assertLinesFit(result, safeWidth, "sidebar");
-    if (result.length !== targetHeight) {
-      throw new Error(`sidebar height mismatch (${result.length} != ${targetHeight})`);
-    }
+    if (result.length !== targetHeight) throw new Error(`sidebar height mismatch (${result.length} != ${targetHeight})`);
     this.cachedSignature = signature;
     this.cachedLines = result;
     return result;
@@ -161,97 +163,110 @@ export class SidebarComponent implements Component {
   }
 
   private renderHeader(width: number): string[] {
-    const focus = this.focused ? `${FG_ACC}focused${RST}` : `${FG_DIM}passive${RST}`;
-    const tail = this.followTail ? `${FG_DIM}tail${RST}` : `${FG_MID}browsing${RST}`;
+    const position = this.selectedIndex() + 1;
+    const count = this.messages.length;
+    const location = count > 0 ? `${position}/${count}` : "0";
+    const selected = this.messages[this.selectedIndex()];
+    const detail = selected
+      ? `${this.focused ? "Selected" : "Current"} #${selected.index} ${formatTime(selected.timestamp)}`
+      : "User prompts";
     return [
-      fillRow(` ${BOLD}${FG_BRIGHT}Messages${RST} ${FG_FAINT}${this.messages.length}${RST}`, width, BG_HDR),
-      fillRow(` ${focus}${FG_FAINT} · ${RST}${tail}`, width, BG),
+      fillRow(` ${BOLD}${FG_BRIGHT}Messages${RST} ${FG_FAINT}${location}${RST}`, width, BG_HDR),
+      fillRow(` ${FG_DIM}${detail}${RST}`, width, BG),
     ];
   }
 
   private renderBody(width: number, height: number): string[] {
     if (height === 0) return [];
-    if (this.messages.length === 0) {
-      return this.padTop([fillRow(` ${FG_DIM}No messages yet${RST}`, width, BG)], height, width);
-    }
+    if (this.messages.length === 0) return this.padBottom([fillRow(` ${FG_DIM}No messages yet${RST}`, width, BG)], height, width);
 
     const selected = this.selectedIndex();
-    const newest = this.messages.length - 1;
-    const selectedBudget = Math.max(1, height - (selected === newest ? 0 : height >= 3 ? 2 : 1));
-    const groups = new Map<number, MessageRows>();
-    groups.set(selected, { index: selected, lines: this.renderMessage(selected, width, selectedBudget) });
-    if (selected !== newest && height >= 2) {
-      groups.set(newest, { index: newest, lines: this.renderMessage(newest, width, 1) });
-    }
+    let start = this.followTail ? this.tailStart(width, height) : this.startForSelection(width, height, selected);
+    const preserved = this.indexForId(this.viewportStartId);
+    if (!this.followTail && preserved >= 0 && selected >= preserved && this.rangeFitsSelection(width, height, preserved, selected)) start = preserved;
 
-    const candidates = Array.from({ length: this.messages.length }, (_, index) => index)
-      .filter((index) => !groups.has(index))
-      .sort((a, b) => {
-        const aDistance = Math.min(Math.abs(a - selected), newest - a);
-        const bDistance = Math.min(Math.abs(b - selected), newest - b);
-        return aDistance - bDistance || b - a;
-      });
-    for (const index of candidates) {
-      const group = { index, lines: this.renderMessage(index, width) };
-      groups.set(index, group);
-      if (this.composeGroups(groups, width, true).length > height) groups.delete(index);
-    }
-
-    let lines = this.composeGroups(groups, width, true);
-    if (lines.length > height) lines = this.composeGroups(groups, width, false);
-    return this.padTop(lines, height, width);
-  }
-
-  private composeGroups(groups: Map<number, MessageRows>, width: number, showGaps: boolean): string[] {
-    const ordered = [...groups.values()].sort((a, b) => a.index - b.index);
     const lines: string[] = [];
-    let previous = -1;
-    for (const group of ordered) {
-      if (showGaps && previous >= 0 && group.index > previous + 1) {
-        lines.push(fillRow(` ${FG_FAINT}··· ${group.index - previous - 1} hidden${RST}`, width, BG));
-      }
-      lines.push(...group.lines);
-      previous = group.index;
+    for (let index = start; index < this.messages.length && lines.length < height; index++) {
+      const remaining = height - lines.length;
+      lines.push(...this.renderMessage(index, width, remaining));
     }
-    return lines;
+    this.viewportStartId = this.messages[start]?.id ?? null;
+    return this.padBottom(lines.slice(0, height), height, width);
   }
 
-  private padTop(lines: string[], height: number, width: number): string[] {
+  private tailStart(width: number, height: number): number {
+    let start = this.messages.length - 1;
+    let rows = this.messageRowCount(start, width, height);
+    while (start > 0) {
+      const next = this.messageRowCount(start - 1, width, height);
+      if (rows + next > height) break;
+      rows += next;
+      start--;
+    }
+    return start;
+  }
+
+  private startForSelection(width: number, height: number, selected: number): number {
+    let start = selected;
+    let rows = this.messageRowCount(selected, width, height);
+    while (start > 0) {
+      const next = this.messageRowCount(start - 1, width, height);
+      if (rows + next > height) break;
+      rows += next;
+      start--;
+    }
+    return start;
+  }
+
+  private rangeFitsSelection(width: number, height: number, start: number, selected: number): boolean {
+    let rows = 0;
+    for (let index = start; index <= selected; index++) {
+      rows += this.messageRowCount(index, width, height);
+      if (rows > height) return false;
+    }
+    return true;
+  }
+
+  private messageRowCount(index: number, width: number, maxRows: number): number {
+    return this.renderMessage(index, width, maxRows).length;
+  }
+
+  private padBottom(lines: string[], height: number, width: number): string[] {
     const padding = Array.from({ length: Math.max(0, height - lines.length) }, () => fillRow(" ", width, BG));
-    return [...padding, ...lines];
+    return [...lines, ...padding];
   }
 
-  private renderMessage(index: number, width: number, maxRows = 10): string[] {
+  private renderMessage(index: number, width: number, maxRows = Number.MAX_SAFE_INTEGER): string[] {
     const message = this.messages[index]!;
     const selected = message.id === this.selectedId;
     const background = selected ? BG_SEL : BG;
     const arrow = selected && this.focused ? `${FG_ACC}›${RST}` : " ";
-    const number = `${FG_FAINT}${String(message.index).padStart(2)}${RST}`;
-    const time = `${FG_TIME}${formatTime(message.timestamp)}${RST}`;
     if (!this.expandedIds.has(message.id) || maxRows <= 1) {
-      const prefix = ` ${arrow}${number} ${time} `;
+      const prefix = ` ${arrow} `;
       const text = truncateToWidth(message.text.replace(/\s+/g, " "), Math.max(0, width - visibleWidth(prefix)), "…");
       return [fillRow(`${prefix}${selected ? FG_BRIGHT : FG_NORM}${text}${RST}`, width, background)];
     }
 
-    const lines = [fillRow(` ${arrow}${number} ${time}`, width, background)];
+    const number = `${FG_FAINT}#${message.index}${RST}`;
+    const time = `${FG_TIME}${formatTime(message.timestamp)}${RST}`;
+    const lines = [fillRow(` ${arrow} ${number} ${time}`, width, background)];
     const wrapped = wrapText(message.text, Math.max(1, width - 4));
-    const contentRows = Math.max(0, maxRows - 2);
-    for (const line of wrapped.slice(0, contentRows)) {
-      lines.push(fillRow(`   ${FG_EXP}${line}${RST}`, width, background));
-    }
-    if (wrapped.length > contentRows && lines.length < maxRows) {
-      lines.push(fillRow(`   ${FG_DIM}${DIM}…+${wrapped.length - contentRows} lines${RST}`, width, background));
-    } else if (lines.length < maxRows) {
-      lines.push(fillRow(" ", width, background));
+    const contentRows = Math.max(0, maxRows - 1);
+    for (const line of wrapped.slice(0, contentRows)) lines.push(fillRow(`   ${FG_EXP}${line}${RST}`, width, background));
+    if (wrapped.length > contentRows && lines.length === maxRows) {
+      lines[lines.length - 1] = fillRow(`   ${FG_DIM}${DIM}…+${wrapped.length - contentRows + 1} lines${RST}`, width, background);
     }
     return lines;
   }
 
   private selectedIndex(): number {
     if (this.messages.length === 0) return -1;
-    const index = this.messages.findIndex((message) => message.id === this.selectedId);
+    const index = this.indexForId(this.selectedId);
     return index >= 0 ? index : this.messages.length - 1;
+  }
+
+  private indexForId(id: string | null): number {
+    return id ? this.messages.findIndex((message) => message.id === id) : -1;
   }
 
   private signature(width: number, height: number): string {
@@ -266,8 +281,8 @@ export class SidebarComponent implements Component {
       model: this.options.ctx.model?.id,
       thinking: this.options.getThinkingLevel(),
       usage,
-      statuses: statuses ? [...statuses.entries()] : [],
-      goal: goal ? `${goal.goalId}:${goal.status}:${goal.tokensUsed}:${goal.activeSeconds}:${goal.updatedAt}` : null,
+      statuses: statuses && typeof (statuses as any).entries === "function" ? [...statuses.entries()] : [],
+      goal: goal ? `${goal.goalId}:${goal.status}:${goal.usage.tokensUsed}:${goal.usage.activeSeconds}:${goal.updatedAt}` : null,
       cmux: cmux ? `${cmux.workspaceTitle}:${cmux.workspaceRef}:${cmux.surfaceRef}` : null,
     });
   }

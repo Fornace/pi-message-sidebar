@@ -52,8 +52,8 @@ test("set then usage entries reconstruct the live goal", () => {
   const goal = readThreadGoal([setEntry("Ship it"), usageEntry("g1", 500_000, 600, 200)]);
   assert.equal(goal?.objective, "Ship it");
   assert.equal(goal?.status, "active");
-  assert.equal(goal?.tokensUsed, 500_000);
-  assert.equal(goal?.activeSeconds, 600);
+  assert.equal(goal?.usage.tokensUsed, 500_000);
+  assert.equal(goal?.usage.activeSeconds, 600);
   assert.equal(goal?.updatedAt, 200);
 });
 
@@ -73,8 +73,8 @@ test("stale or foreign usage entries are ignored", () => {
     usageEntry("other", 9_999_999, 9_999, 999), // wrong goal id
     usageEntry("g1", 100, 10, 50), // older updatedAt than the set entry
   ]);
-  assert.equal(goal?.tokensUsed, 0);
-  assert.equal(goal?.activeSeconds, 0);
+  assert.equal(goal?.usage.tokensUsed, 0);
+  assert.equal(goal?.usage.activeSeconds, 0);
 });
 
 test("budgetLimited goal rejects regression to active", () => {
@@ -84,7 +84,17 @@ test("budgetLimited goal rejects regression to active", () => {
     usageEntry("g1", 3_000_000, 700, 300, "active"),
   ]);
   assert.equal(limited?.status, "budgetLimited");
-  assert.equal(limited?.activeSeconds, 600);
+  assert.equal(limited?.usage.activeSeconds, 600);
+});
+
+test("invalid status and numeric fields are rejected", () => {
+  const invalidStatus = setEntry("Ship it");
+  (invalidStatus.data as any).goal.status = "running";
+  assert.equal(readThreadGoal([invalidStatus]), null);
+
+  const invalidUsage = setEntry("Ship it");
+  (invalidUsage.data as any).goal.usage.tokensUsed = Number.NaN;
+  assert.equal(readThreadGoal([invalidUsage]), null);
 });
 
 test("complete goal ignores later usage entries", () => {
@@ -95,5 +105,5 @@ test("complete goal ignores later usage entries", () => {
     usageEntry("g1", 200, 20, 500),
   ]);
   assert.equal(done?.status, "complete");
-  assert.equal(done?.tokensUsed, 100);
+  assert.equal(done?.usage.tokensUsed, 100);
 });

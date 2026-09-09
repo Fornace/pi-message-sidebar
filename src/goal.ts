@@ -1,106 +1,96 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+export type GoalStatus = "active" | "paused" | "budgetLimited" | "complete";
+
 export type ThreadGoal = {
   goalId: string;
   objective: string;
-  status: "active" | "paused" | "budgetLimited" | "complete";
+  status: GoalStatus;
   tokenBudget: number | null;
-  tokensUsed: number;
-  activeSeconds: number;
+  usage: { tokensUsed: number; activeSeconds: number };
   createdAt: number;
   updatedAt: number;
 };
 
-type BranchEntry = { type?: string; customType?: string; data?: unknown };
+type BranchEntry = { type?: string; customType?: string; data?: unknown; id?: string; timestamp?: string };
+type GoalEntrySource = "command" | "tool" | "runtime";
 
 const GOAL_ENTRY_TYPE = "pi-codex-goal";
-
-type GoalEntrySource = "command" | "tool" | "runtime";
 
 function isGoalEntrySource(value: unknown): value is GoalEntrySource {
   return value === "command" || value === "tool" || value === "runtime";
 }
 
-function isThreadGoal(value: unknown): value is RawGoal {
-  const goal = value as RawGoal | null;
-  if (!goal || typeof goal !== "object") return false;
-  const usage = goal.usage as { tokensUsed?: unknown; activeSeconds?: unknown } | undefined;
-  return (
-    typeof goal.goalId === "string" &&
-    typeof goal.objective === "string" &&
-    (goal.status === "active" || goal.status === "paused" || goal.status === "budgetLimited" || goal.status === "complete") &&
-    (goal.tokenBudget === null || typeof goal.tokenBudget === "number") &&
-    typeof goal.createdAt === "number" &&
-    typeof goal.updatedAt === "number" &&
-    typeof usage?.tokensUsed === "number" &&
-    typeof usage.activeSeconds === "number"
+function isFiniteNonNegative(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isGoalStatus(value: unknown): value is GoalStatus {
+  return value === "active" || value === "paused" || value === "budgetLimited" || value === "complete";
+}
+
+function isThreadGoal(value: unknown): value is ThreadGoal {
+  const goal = value as ThreadGoal | null;
+  return Boolean(
+    goal && typeof goal === "object" &&
+    typeof goal.goalId === "string" && goal.goalId.length > 0 &&
+    typeof goal.objective === "string" && goal.objective.trim().length > 0 &&
+    isGoalStatus(goal.status) &&
+    (goal.tokenBudget === null || (Number.isInteger(goal.tokenBudget) && goal.tokenBudget >= 0)) &&
+    isFiniteNonNegative(goal.createdAt) &&
+    isFiniteNonNegative(goal.updatedAt) &&
+    isFiniteNonNegative(goal.usage?.tokensUsed) &&
+    isFiniteNonNegative(goal.usage?.activeSeconds)
   );
 }
 
-type RawGoal = Omit<ThreadGoal, "tokensUsed" | "activeSeconds"> & {
-  usage: { tokensUsed: number; activeSeconds: number };
-};
+function cloneGoal(goal: ThreadGoal): ThreadGoal {
+  return { ...goal, usage: { ...goal.usage } };
+}
 
-/**
- * Reconstructs the current thread goal from pi-codex-goal session entries.
- * Mirrors reconstructGoal() from pi-codex-goal dist/state.js (schema version 1):
- * "set" entries replace the goal, "clear" entries drop it, and "usage" entries
- * advance tokens/time for runtime-usage statuses only.
- */
+/** Mirrors pi-codex-goal's schema-v1 reconstruction contract. */
 export function readThreadGoal(entries: Iterable<BranchEntry>): ThreadGoal | null {
   let goal: ThreadGoal | null = null;
   for (const entry of entries) {
     if (entry.type !== "custom" || entry.customType !== GOAL_ENTRY_TYPE) continue;
     const data = entry.data as Record<string, unknown> | null;
-    if (!data || typeof data !== "object" || data.version !== 1 || typeof data.at !== "number") continue;
-    if (data.kind === "clear" && isGoalEntrySource(data.source) && (data.clearedGoalId === null || typeof data.clearedGoalId === "string")) {
+    if (!data || typeof data !== "object" || data.version !== 1 || !isFiniteNonNegative(data.at)) continue;
+
+    if (data.kind === "clear") {
+      if (!isGoalEntrySource(data.source) || (data.clearedGoalId !== null && typeof data.clearedGoalId !== "string")) continue;
       goal = null;
-    } else if (data.kind === "set" && isGoalEntrySource(data.source) && isThreadGoal(data.goal)) {
-      const raw = data.goal as RawGoal;
-      goal = {
-        goalId: raw.goalId,
-        objective: raw.objective,
-        status: raw.status,
-        tokenBudget: raw.tokenBudget,
-        tokensUsed: raw.usage.tokensUsed,
-        activeSeconds: raw.usage.activeSeconds,
-        createdAt: raw.createdAt,
-        updatedAt: raw.updatedAt,
-      };
-    } else if (data.kind === "usage" && data.source === "runtime" && goal) {
-      const usage = data.usage as { tokensUsed?: number; activeSeconds?: number } | undefined;
-      const updatedAt = data.updatedAt;
-      const status = data.status;
-      if (data.goalId !== goal.goalId) continue;
-      if (status !== "active" && status !== "budgetLimited") continue;
-      if (goal.status !== "active" && goal.status !== "budgetLimited") continue;
-      if (goal.status === "budgetLimited" && status === "active") continue;
-      if (typeof updatedAt !== "number" || typeof usage?.tokensUsed !== "number" || typeof usage.activeSeconds !== "number") continue;
-      if (updatedAt < goal.updatedAt || usage.tokensUsed < goal.tokensUsed || usage.activeSeconds < goal.activeSeconds) continue;
-      const current: ThreadGoal = goal;
-      goal = {
-        ...current,
-        status,
-        tokensUsed: usage.tokensUsed,
-        activeSeconds: usage.activeSeconds,
-        updatedAt,
-      };
+      continue;
     }
+    if (data.kind === "set") {
+      if (!isGoalEntrySource(data.source) || !isThreadGoal(data.goal)) continue;
+      goal = cloneGoal(data.goal);
+      continue;
+    }
+    if (data.kind !== "usage" || data.source !== "runtime" || !goal) continue;
+
+    const status = data.status;
+    const usage = data.usage as ThreadGoal["usage"] | undefined;
+    if (data.goalId !== goal.goalId || (status !== "active" && status !== "budgetLimited")) continue;
+    if (goal.status !== "active" && goal.status !== "budgetLimited") continue;
+    if (goal.status === "budgetLimited" && status === "active") continue;
+    if (!isFiniteNonNegative(data.updatedAt) || !isFiniteNonNegative(usage?.tokensUsed) || !isFiniteNonNegative(usage.activeSeconds)) continue;
+    if (data.updatedAt < goal.updatedAt || usage.tokensUsed < goal.usage.tokensUsed || usage.activeSeconds < goal.usage.activeSeconds) continue;
+    goal = { ...goal, status, usage: { ...usage }, updatedAt: data.updatedAt };
   }
   return goal;
 }
 
-type GoalCache = { branch: object; key: string; goal: ThreadGoal | null };
-const cache = new WeakMap<ExtensionContext, GoalCache>();
+type GoalCache = { key: string; goal: ThreadGoal | null };
+const caches = new WeakMap<ExtensionContext, GoalCache>();
 
-/** Cached readThreadGoal over the current session branch. */
+/** Cached reconstruction scoped to each extension context. */
 export function readSessionGoal(ctx: ExtensionContext): ThreadGoal | null {
   const branch = ctx.sessionManager.getBranch();
   const last = branch.at(-1);
   const key = `${branch.length}:${last?.id ?? ""}:${last?.timestamp ?? ""}`;
-  const previous = cache.get(ctx);
-  if (previous?.branch === branch && previous.key === key) return previous.goal;
+  const previous = caches.get(ctx);
+  if (previous?.key === key) return previous.goal;
   const goal = readThreadGoal(branch);
-  cache.set(ctx, { branch, key, goal });
+  caches.set(ctx, { key, goal });
   return goal;
 }

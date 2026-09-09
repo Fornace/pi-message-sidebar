@@ -4,6 +4,10 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { SIDEBAR_WIDTH } from "../src/constants.ts";
 import { SidebarComponent, type UserMessage } from "../src/sidebar-component.ts";
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
 function fakeContext(messages: UserMessage[]) {
   const branch = messages.map((message) => ({
     type: "message",
@@ -35,31 +39,38 @@ function fakeTui(rows = 24) {
   } as never;
 }
 
-test("sidebar lines fit at every supported component width", () => {
-  const messages: UserMessage[] = Array.from({ length: 24 }, (_, index) => ({
-    id: String(index),
+function makeSidebar(messages: UserMessage[], rows = 24) {
+  return new SidebarComponent({
+    tui: fakeTui(rows),
+    ctx: fakeContext(messages),
+    messages,
+    getThinkingLevel: () => "high",
+    getCmuxContext: () => null,
+    getFooterData: () => null,
+  });
+}
+
+function messages(count: number): UserMessage[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `id-${index}`,
     index: index + 1,
-    timestamp: new Date(2026, 7, 31, 12, index).toISOString(),
-    text: `Message ${index + 1} with a long path /Users/example/repository/src/component-${index}.ts and wide text 你好世界`,
+    timestamp: new Date(2026, 8, 9, 12, index).toISOString(),
+    text: `unique-message-${index} with enough text to identify this chronological row`,
   }));
-  const ctx = fakeContext(messages);
+}
+
+test("sidebar lines fit at every supported component width", () => {
+  const history = messages(24);
+  const ctx = fakeContext(history);
   (ctx as any).sessionManager.getBranch = () => [
-    ...messages.map((message) => ({
-      type: "message",
-      id: message.id,
-      timestamp: message.timestamp,
-      message: { role: "user", content: message.text },
-    })),
+    ...(ctx as any).sessionManager.getEntries(),
     {
-      type: "custom",
-      customType: "pi-codex-goal",
+      type: "custom", customType: "pi-codex-goal", id: "goal", timestamp: "2026-09-09T12:30:00Z",
       data: {
-        version: 1,
-        kind: "set",
-        source: "tool",
+        version: 1, kind: "set", source: "tool", at: 200,
         goal: {
           goalId: "g1",
-          objective: "Upgrade the pi-message-sidebar extension with a live goal recap, cmux session context, and a full debug and beautification pass while keeping every line within the dock width",
+          objective: "Upgrade the sidebar with a compact goal recap while keeping every line inside its width",
           status: "active",
           tokenBudget: 3_000_000,
           usage: { tokensUsed: 1_234_567, activeSeconds: 2_460 },
@@ -70,10 +81,7 @@ test("sidebar lines fit at every supported component width", () => {
     },
   ];
   const sidebar = new SidebarComponent({
-    tui: fakeTui(),
-    ctx,
-    messages,
-    getThinkingLevel: () => "xhigh",
+    tui: fakeTui(), ctx, messages: history, getThinkingLevel: () => "xhigh",
     getCmuxContext: () => ({ workspaceTitle: "π - imagineer-standalone with a very long title", workspaceRef: "workspace:7", surfaceRef: "surface:38" }),
     getFooterData: () => ({
       getGitBranch: () => "feature/a-very-long-branch-name",
@@ -85,49 +93,38 @@ test("sidebar lines fit at every supported component width", () => {
 
   for (const width of [1, 8, 16, 24, 35, SIDEBAR_WIDTH]) {
     const lines = sidebar.render(width);
-    assert.ok(lines.length <= 24);
+    assert.equal(lines.length, 24);
     assert.ok(lines.every((line) => visibleWidth(line) <= width), `overflow at width ${width}`);
     sidebar.invalidate();
   }
 });
 
+test("collapsed rows spend width on message text and keep metadata off body rows", () => {
+  const sidebar = makeSidebar(messages(1), 12);
+  const lines = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const bodyRow = lines.find((line) => line.includes("unique-message-0"));
+  assert.ok(bodyRow);
+  assert.match(bodyRow, /unique-message-0 with enough text/);
+  // Metadata for the selected message lives in the header, not on every body row.
+  assert.match(lines[1]!, /#1 12:00/);
+});
+
 test("expanded messages stay bounded", () => {
-  const messages = [{
-    id: "1",
-    index: 1,
-    timestamp: new Date().toISOString(),
+  const history = [{
+    id: "1", index: 1, timestamp: new Date().toISOString(),
     text: "supercalifragilisticexpialidocious/without/any/breaks/and/with/你好世界".repeat(4),
   }];
-  const sidebar = new SidebarComponent({
-    tui: fakeTui(),
-    ctx: fakeContext(messages),
-    messages,
-    getThinkingLevel: () => "high",
-    getCmuxContext: () => null,
-    getFooterData: () => null,
-  });
+  const sidebar = makeSidebar(history);
   sidebar.setFocused(true);
   sidebar.handleInput("\r");
-  const lines = sidebar.render(35);
-  assert.ok(lines.every((line) => visibleWidth(line) <= 35));
+  assert.ok(sidebar.render(35).every((line) => visibleWidth(line) <= 35));
 });
 
 test("selection and expansion survive message insertion by ID", () => {
-  const messages: UserMessage[] = ["a", "b", "c"].map((id, index) => ({
-    id,
-    index: index + 1,
-    timestamp: new Date(2026, 8, 9, 12, index).toISOString(),
-    text: `message-${id}`,
+  const history: UserMessage[] = ["a", "b", "c"].map((id, index) => ({
+    id, index: index + 1, timestamp: new Date(2026, 8, 9, 12, index).toISOString(), text: `message-${id}`,
   }));
-  const sidebar = new SidebarComponent({
-    tui: fakeTui(),
-    ctx: fakeContext(messages),
-    messages,
-    getThinkingLevel: () => "high",
-    getCmuxContext: () => null,
-    getFooterData: () => null,
-  });
-
+  const sidebar = makeSidebar(history);
   sidebar.setFocused(true);
   sidebar.handleInput("\x1b[A");
   sidebar.handleInput("\r");
@@ -136,8 +133,8 @@ test("selection and expansion survive message insertion by ID", () => {
   assert.equal(sidebar.isFollowingTail(), false);
 
   sidebar.updateMessages([
-    { id: "x", index: 1, timestamp: messages[0]!.timestamp, text: "inserted" },
-    ...messages.map((message, index) => ({ ...message, index: index + 2 })),
+    { id: "x", index: 1, timestamp: history[0]!.timestamp, text: "inserted" },
+    ...history.map((message, index) => ({ ...message, index: index + 2 })),
     { id: "d", index: 5, timestamp: new Date().toISOString(), text: "newest" },
   ]);
   assert.equal(sidebar.getSelectedMessageId(), "b");
@@ -146,58 +143,43 @@ test("selection and expansion survive message insertion by ID", () => {
 });
 
 test("follow-tail selects new messages until the user browses away", () => {
-  const initial: UserMessage[] = [{ id: "a", index: 1, timestamp: new Date().toISOString(), text: "alpha" }];
-  const sidebar = new SidebarComponent({
-    tui: fakeTui(),
-    ctx: fakeContext(initial),
-    messages: initial,
-    getThinkingLevel: () => "high",
-    getCmuxContext: () => null,
-    getFooterData: () => null,
-  });
-  sidebar.updateMessages([...initial, { id: "b", index: 2, timestamp: new Date().toISOString(), text: "bravo" }]);
-  assert.equal(sidebar.getSelectedMessageId(), "b");
+  const initial = messages(1);
+  const sidebar = makeSidebar(initial);
+  sidebar.updateMessages(messages(2));
+  assert.equal(sidebar.getSelectedMessageId(), "id-1");
   sidebar.handleInput("\x1b[A");
-  sidebar.updateMessages([...initial, { id: "b", index: 2, timestamp: new Date().toISOString(), text: "bravo" }, { id: "c", index: 3, timestamp: new Date().toISOString(), text: "charlie" }]);
-  assert.equal(sidebar.getSelectedMessageId(), "a");
+  sidebar.updateMessages(messages(3));
+  assert.equal(sidebar.getSelectedMessageId(), "id-0");
 });
 
-test("row-aware viewport always renders selected and newest message", () => {
-  const messages: UserMessage[] = Array.from({ length: 30 }, (_, index) => ({
-    id: `id-${index}`,
-    index: index + 1,
-    timestamp: new Date(2026, 8, 9, 12, index).toISOString(),
-    text: `unique-message-${index}`,
-  }));
-  const sidebar = new SidebarComponent({
-    tui: fakeTui(15),
-    ctx: fakeContext(messages),
-    messages,
-    getThinkingLevel: () => "high",
-    getCmuxContext: () => null,
-    getFooterData: () => null,
-  });
+test("viewport is one contiguous chronological range without newest teleporting", () => {
+  const history = messages(30);
+  const sidebar = makeSidebar(history, 15);
   sidebar.setFocused(true);
   sidebar.handleInput("\x1b[H");
-  const clean = sidebar.render(SIDEBAR_WIDTH).join("\n").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  const clean = stripAnsi(sidebar.render(SIDEBAR_WIDTH).join("\n"));
   assert.match(clean, /unique-message-0/);
-  assert.match(clean, /unique-message-29/);
-  assert.equal(sidebar.render(SIDEBAR_WIDTH).length, 15);
+  assert.match(clean, /unique-message-1/);
+  assert.doesNotMatch(clean, /unique-message-29/);
+  assert.doesNotMatch(clean, /hidden/);
 });
 
-test("tiny terminal heights remain exact and non-crashing", () => {
-  const messages: UserMessage[] = [{ id: "a", index: 1, timestamp: new Date().toISOString(), text: "alpha" }];
-  for (const rows of [1, 2, 3, 8]) {
-    const sidebar = new SidebarComponent({
-      tui: fakeTui(rows),
-      ctx: fakeContext(messages),
-      messages,
-      getThinkingLevel: () => "high",
-      getCmuxContext: () => null,
-      getFooterData: () => null,
-    });
+test("short histories top-align and use blank rows only below messages", () => {
+  const sidebar = makeSidebar(messages(2), 15);
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const first = clean.findIndex((line) => line.includes("unique-message-0"));
+  const second = clean.findIndex((line) => line.includes("unique-message-1"));
+  assert.equal(first, 2);
+  assert.equal(second, 3);
+});
+
+test("tiny heights preserve a message whenever one row exists", () => {
+  const history = messages(1);
+  for (const rows of [1, 2, 3, 4, 5, 8]) {
+    const sidebar = makeSidebar(history, rows);
     const lines = sidebar.render(SIDEBAR_WIDTH);
     assert.equal(lines.length, rows);
     assert.ok(lines.every((line) => visibleWidth(line) <= SIDEBAR_WIDTH));
+    assert.match(stripAnsi(lines.join("\n")), /unique-message-0/, `message missing at ${rows} rows`);
   }
 });

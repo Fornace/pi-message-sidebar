@@ -11,6 +11,9 @@ for (const helper of ["darwin-arm64", "darwin-x64"].map((arch) => path.resolve(p
   if (fs.existsSync(helper)) fs.chmodSync(helper, 0o755);
 }
 const outputPath = `/tmp/pi-message-sidebar-${mode}-${columns}x${rows}.ansi`;
+const sessionPath = process.env.SIDEBAR_SESSION;
+const expectedMessage = process.env.SIDEBAR_EXPECT_MESSAGE;
+const expectedSelection = process.env.SIDEBAR_EXPECT_SELECTION;
 const piPath = fs.realpathSync(process.env.PI_BIN ?? "/opt/homebrew/bin/pi");
 const nodePath = fs.realpathSync(process.execPath);
 const args = [piPath];
@@ -21,7 +24,7 @@ args.push(
   "--no-skills",
   "--no-prompt-templates",
   "--no-context-files",
-  "--no-session",
+  ...(sessionPath ? ["--session", sessionPath] : ["--no-session"]),
   "--tui-mode", mode,
 );
 const child = pty.spawn(nodePath, args, {
@@ -54,7 +57,15 @@ child.onExit(({ exitCode }) => {
     console.error("Narrow smoke test did not exercise responsive collapse");
     process.exit(1);
   }
-  console.log(JSON.stringify({ mode, columns, rows, exitCode, outputPath, bytes: output.length }));
+  if (expectedMessage && !clean.includes(expectedMessage)) {
+    console.error(`Populated smoke test never rendered ${JSON.stringify(expectedMessage)}`);
+    process.exit(1);
+  }
+  if (expectedSelection && !clean.includes(`Selected ${expectedSelection}`)) {
+    console.error(`PTY navigation never selected ${JSON.stringify(expectedSelection)}`);
+    process.exit(1);
+  }
+  console.log(JSON.stringify({ mode, columns, rows, exitCode, outputPath, bytes: output.length, populated: Boolean(sessionPath) }));
   process.exit(exitCode ?? 0);
 });
 if (columns >= 123) {
@@ -62,7 +73,9 @@ if (columns >= 123) {
   setTimeout(() => child.resize(columns, rows), 1200);
 }
 setTimeout(() => child.write("/sidebar\r"), 1700);
-setTimeout(() => child.write("\x1b"), 2300);
+setTimeout(() => child.write("\x1b[A"), 2100);
+setTimeout(() => child.write("\r"), 2250);
+setTimeout(() => child.write("\x1b"), 2450);
 setTimeout(() => child.write("\x04"), 2900);
 setTimeout(() => {
   if (finished) return;

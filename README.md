@@ -5,14 +5,14 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 ## Features
 
 - Fixed 42-column panel on the right
-- Live goal card: objective, status, token budget, and elapsed time from pi-codex-goal entries
-- cmux session context: workspace title and surface ref replace the session file datetime inside cmux
+- Two-row message header with position and selected-message metadata
+- Contiguous chronological message viewport that top-aligns short histories and follows new messages until you browse away
+- Compact status dock of at most four rows, including an optional two-line goal
+- cmux session context that preserves the complete surface ref by truncating the workspace title first
 - Main transcript and editor render in their own reserved width
-- Native side-by-side layout in fullscreen TUI mode
-- Regular-mode compositor that reserves the same width in scrollback mode
+- Persistent native right rail in fullscreen TUI mode
+- Compact regular-mode compositor in terminal-owned scrollback mode
 - Automatic collapse when the terminal cannot keep an 80-column main pane
-- First and last five user messages remain visible
-- Gap indicator shows hidden message counts
 - `Ctrl+Shift+H` focuses the sidebar
 - Arrow keys navigate messages
 - `Enter` expands or collapses a message
@@ -43,7 +43,9 @@ pi install git:github.com/Fornace/pi-message-sidebar
 
 ## Usage
 
-The sidebar appears automatically in interactive mode when the terminal is at least 123 columns wide. It collapses below that breakpoint so Pi keeps a usable main pane.
+The sidebar appears automatically in interactive mode when the terminal is at least 123 columns wide. It collapses below that breakpoint so Pi keeps a usable main pane. Fullscreen mode uses a persistent `HStack` right rail. Regular mode uses a compact compositor over the terminal's current screenful; because the terminal owns regular-mode scrollback, the sidebar is not permanently sticky while browsing old scrollback. An on-demand overlay is intentionally not implemented: overlay components are disposed on close, which conflicts with the persistent ID-stable sidebar state, so the compact compositor is kept instead.
+
+The message body is one contiguous chronological viewport. New messages remain selected while follow-tail is active. Navigating away preserves the selected message, expansion state, and visible range by message ID when history entries are inserted or refreshed.
 
 - Press `Ctrl+Shift+H` to focus or unfocus the sidebar.
 - Press `↑` or `↓` to navigate.
@@ -55,9 +57,9 @@ The sidebar appears automatically in interactive mode when the terminal is at le
 ## Architecture
 
 - `index.ts` is the auto-discovered extension entrypoint.
-- `src/layout.ts` reserves a real horizontal region in fullscreen mode and composes an equivalent region in regular mode.
-- `src/sidebar-component.ts` owns message navigation and bounded rendering.
-- `src/status-dock.ts` renders session, model, context, cost, goal, and extension status data.
+- `src/layout.ts` reserves a persistent horizontal region in fullscreen mode and composes the current screenful in regular mode.
+- `src/sidebar-component.ts` owns ID-stable navigation, expansion, follow-tail behavior, and the row-aware contiguous viewport.
+- `src/status-dock.ts` renders a compact, height-bounded goal, runtime, cmux, and validated status summary.
 - `src/goal.ts` reconstructs the active pi-codex-goal from session entries.
 - `src/cmux.ts` resolves the cmux workspace title and surface ref once per session.
 - `src/style.ts` provides ANSI-safe row filling and width helpers.
