@@ -27,13 +27,14 @@ tag push). Defects here reach people who are not Francesco — that is why the
 
 ## State
 
-56 tests: `goal` 9, `sidebar` 21, `summaries` 7, `messages` 4, `files` 3,
-`git-status` 3, `status-dock` 4, `layout` 3. Gates all green at the 1.9.0 tip:
+61 tests: `goal` 9, `sidebar` 26, `summaries` 7, `messages` 5, `files` 3,
+`git-status` 3, `status-dock` 4, `layout` 3. Gates all green at the 1.9.0 tip
+(including the post-review fix commit):
 
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npm run typecheck` | clean |
-| Unit | `npm test` | 56/56 |
+| Unit | `npm test` | 61/61 |
 | Entry point | `npm run test:load` | loads |
 | PTY | `npm run test:pty` | 4/4 |
 | PTY matrix | `npm run test:pty:matrix` | 8/8 |
@@ -167,6 +168,12 @@ current HEAD in every message so the other side can tell whether it is behind.
   mid-row) is covered by a sidebar test; keep it when touching row assembly.
 - `_tmp/latency.mts` is the gateway microbench that replaced pi-bench for
   route selection; `_tmp/preview.mts` renders the rail offline for eyes.
+- The adversarial review (fornace-max critic) found two fatal render crashes
+  and an ANSI injection path that the shipped fuzzer could not see because its
+  LCG RNG lost low bits; all fixed, fuzzer now mulberry32. The critic's
+  exhaustive sweep lives in `_tmp/fuzz-exhaustive3.mts` (199680 renders):
+  re-run it after any viewport or detail arithmetic change, not just the
+  shipped fuzzer.
 - Populated sessions for gates:
   `~/.pi/agent/sessions/--Users-ffrappo-works-repos-mantice--/` (131 messages).
 - Scratch goes in `_tmp/` (gitignored). Durable docs in `docs/`.

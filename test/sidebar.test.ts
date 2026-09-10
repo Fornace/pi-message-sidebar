@@ -565,3 +565,14 @@ test("a preserved viewport anchor survives list shrink and terminal grow", () =>
   assert.equal(lines.length, 30);
   assert.ok(lines.every((l) => visibleWidth(l) === SIDEBAR_WIDTH));
 });
+
+test("focused selection shows a visible one-cell accent marker", () => {
+  const sidebar = makeSidebar({ messages: sampleMessages(3), rows: 25 });
+  sidebar.setFocused(true);
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const selected = clean.find((l) => l.includes("unique-message-2"));
+  assert.ok(selected);
+  assert.match(selected!, /›  3 \d\d:\d\d /, "the selected row must carry the marker glyph");
+  const other = clean.find((l) => l.includes("unique-message-0"));
+  assert.ok(other && !other.includes("›"), "unselected rows must not carry the marker");
+});
