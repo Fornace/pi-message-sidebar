@@ -2,8 +2,10 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works
 
 export const BG = "\x1b[48;5;232m";
 export const BG_SEL = "\x1b[48;5;237m";
-export const BG_HDR = "\x1b[48;5;233m";
-export const BG_CARD = "\x1b[48;5;234m";
+/** Hint strip under the message list. */
+export const BG_HINT = "\x1b[48;5;233m";
+/** Goal block: the strongest ground in the rail. */
+export const BG_GOAL = "\x1b[48;5;236m";
 export const BG_DETAIL = "\x1b[48;5;235m";
 export const FG_RULE = "\x1b[38;5;240m";
 export const FG_SECONDARY = "\x1b[38;5;246m";
@@ -13,18 +15,12 @@ export const FG_STATUS_DONE = "\x1b[38;5;150m";
 export const FG_STATUS_WAIT = "\x1b[38;5;221m";
 export const FG_FAINT = "\x1b[38;5;240m";
 export const FG_DIM = "\x1b[38;5;243m";
-export const FG_MID = "\x1b[38;5;248m";
-export const FG_NORM = "\x1b[38;5;250m";
 export const FG_BRIGHT = "\x1b[38;5;255m";
 export const FG_ACC = "\x1b[38;5;75m";
 export const FG_INFO = "\x1b[38;5;80m";
-export const FG_OK = "\x1b[38;5;114m";
-export const FG_WARN = "\x1b[38;5;215m";
 export const FG_ERR = "\x1b[38;5;203m";
-export const FG_TIME = "\x1b[38;5;242m";
 export const FG_EXP = "\x1b[38;5;252m";
 export const BOLD = "\x1b[1m";
-export const DIM = "\x1b[2m";
 export const RST = "\x1b[0m";
 
 export function fillRow(content: string, width: number, bg: string): string {
@@ -41,7 +37,6 @@ export function wrapText(text: string, width: number): string[] {
 export function formatCost(cost: number): string {
   if (!Number.isFinite(cost)) return "$?";
   if (cost >= 1000) return `$${(cost / 1000).toFixed(2)}k`;
-  if (cost >= 1) return `$${cost.toFixed(2)}`;
   return `$${cost.toFixed(2)}`;
 }
 
@@ -63,15 +58,6 @@ export function formatTime(timestamp: string): string {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-export function formatDuration(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60);
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest ? `${hours}h ${String(rest).padStart(2, "0")}m` : `${hours}h`;
-}
-
 export function sanitizeStatusText(text: string): string {
   return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
 }
@@ -83,20 +69,6 @@ export function formatTokens(count: number): string {
   if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
   if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
   return `${Math.round(count / 1_000_000)}M`;
-}
-
-export function contextColor(percent: number | null): string {
-  if (percent === null) return FG_DIM;
-  if (percent > 90) return FG_ERR;
-  if (percent > 70) return FG_WARN;
-  return FG_OK;
-}
-
-export function progressBar(percent: number | null, width = 10): string {
-  if (percent === null) return `${FG_DIM}${"░".repeat(width)}${RST}`;
-  const clamped = Math.max(0, Math.min(100, percent));
-  const filled = Math.round((clamped / 100) * width);
-  return `${contextColor(percent)}${"█".repeat(filled)}${FG_DIM}${"░".repeat(width - filled)}${RST}`;
 }
 
 export function formatCwd(cwd: string): string {
@@ -121,6 +93,3 @@ export function ellipsizePath(path: string, width: number): string {
   return `…${truncateToWidth(parts.at(-1) ?? path, Math.max(0, width - 1), "")}`;
 }
 
-export function contentWidth(width: number, prefix: string, suffix = 0): number {
-  return Math.max(0, width - visibleWidth(prefix) - suffix);
-}

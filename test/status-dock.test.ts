@@ -1,100 +1,93 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
-import { computeUsage, renderStatusDock, validExtensionStatuses } from "../src/status-dock.ts";
+import { computeUsage, validExtensionStatuses } from "../src/status-dock.ts";
 
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-function context(options: { percent?: number; entries?: any[]; branch?: any[] } = {}) {
-  let percent = options.percent ?? 10;
-  const ctx = {
-    model: { id: "fornace-model-with-a-long-name", provider: "mantice", reasoning: true, contextWindow: 200_000 },
-    sessionManager: {
-      getEntries: () => options.entries ?? [],
-      getBranch: () => options.branch ?? [],
-      getCwd: () => "/Users/example/project",
-      getSessionId: () => "session-id",
-      getSessionName: () => null,
-    },
-    getContextUsage: () => ({ percent, contextWindow: 200_000 }),
-  } as never;
-  return { ctx, setPercent: (next: number) => { percent = next; } };
-}
-
-const footer = {
-  getGitBranch: () => "main",
-  getAvailableProviderCount: () => 2,
-  getExtensionStatuses: () => new Map<string, string>(),
-  onBranchChange: () => () => {},
-};
-
-test("normal dock stays within four rows and always ends in its action hint", () => {
-  const { ctx } = context();
-  for (const maxRows of [0, 1, 2, 3, 4, 20]) {
-    const rows = renderStatusDock(42, ctx, footer, "high", false, () => null, maxRows);
-    assert.ok(rows.length <= Math.min(4, maxRows));
-    assert.ok(rows.every((line) => visibleWidth(line) <= 42));
-    if (maxRows > 0) assert.match(stripAnsi(rows.at(-1)!), /Ctrl\+Shift\+H focus/);
-  }
-});
-
-test("goal uses at most two readable rows", () => {
-  const goalEntry = {
-    type: "custom", customType: "pi-codex-goal", id: "goal", timestamp: "goal",
-    data: {
-      version: 1, kind: "set", source: "tool", at: 2,
-      goal: {
-        goalId: "g", objective: "A long objective that should occupy the available goal line rather than being squeezed after telemetry",
-        status: "active", tokenBudget: 1_000_000,
-        usage: { tokensUsed: 500_000, activeSeconds: 60 }, createdAt: 1, updatedAt: 2,
-      },
-    },
+function assistant(id: string, usage: Record<string, unknown>) {
+  return {
+    type: "message",
+    id,
+    timestamp: "2026-09-09T12:00:00Z",
+    message: { role: "assistant", content: "reply", usage },
   };
-  const { ctx } = context({ branch: [goalEntry] });
-  const clean = renderStatusDock(42, ctx, footer, "high", false, () => null, 4).map(stripAnsi);
-  assert.match(clean[0]!, /active 500k\/1.0M 1m/);
-  assert.match(clean[1]!, /A long objective that should occupy/);
-  assert.ok(clean.length <= 4);
-});
+}
 
-test("cmux surface ref survives by truncating the title first", () => {
-  const { ctx } = context();
-  const rows = renderStatusDock(
-    42, ctx, footer, "high", false,
-    () => ({ workspaceTitle: "An extremely long workspace title that cannot fit", workspaceRef: "workspace:7", surfaceRef: "surface:38" }),
-    4,
-  );
-  const clean = rows.map(stripAnsi);
-  assert.match(clean[0]!, /surface:38/);
-  assert.match(clean[0]!, /An extremely/);
-});
+function usageContext(entries: unknown[], percent: number | null, contextWindow = 200_000) {
+  return {
+    ui: { theme: {}, notify() {} },
+    model: { id: "model", provider: "test", reasoning: true, contextWindow },
+    modelRegistry: {},
+    sessionManager: {
+      getEntries: () => entries,
+      getBranch: () => entries,
+      getCwd: () => "/tmp/project",
+      getSessionId: () => "01234567-89ab-cdef-0123-456789abcdef",
+      getSessionFile: () => "/tmp/session.jsonl",
+      getSessionName: () => "session",
+    },
+    getContextUsage: () => (percent === null ? undefined : { tokens: 1, contextWindow, percent }),
+  } as never;
+}
 
 test("live context values update while persisted entries are unchanged", () => {
-  const state = context({ percent: 10, entries: [{ id: "same", timestamp: "same", type: "message", message: { role: "user" } }] });
-  assert.equal(computeUsage(state.ctx).contextPercent, 10);
-  state.setPercent(74);
-  assert.equal(computeUsage(state.ctx).contextPercent, 74);
+  const entries = [assistant("a", { input: 10, output: 5, cost: { total: 0.25 } })];
+  let percent = 10;
+  const ctx = {
+    ...(usageContext(entries, 10) as unknown as Record<string, unknown>),
+    getContextUsage: () => ({ tokens: 1, contextWindow: 200_000, percent }),
+  } as never;
+
+  assert.equal(computeUsage(ctx).contextPercent, 10);
+  percent = 82;
+  // Entries did not change, so totals come from cache, but context is resampled.
+  const second = computeUsage(ctx);
+  assert.equal(second.contextPercent, 82);
+  assert.equal(second.cost, 0.25);
 });
 
 test("usage caches are isolated per extension context", () => {
-  const assistant = (id: string, input: number) => ({ id, timestamp: id, type: "message", message: { role: "assistant", usage: { input, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } });
-  const first = context({ entries: [assistant("same", 10)] }).ctx;
-  const second = context({ entries: [assistant("same", 99)] }).ctx;
-  assert.equal(computeUsage(first).input, 10);
-  assert.equal(computeUsage(second).input, 99);
+  const first = usageContext([assistant("a", { input: 100, cost: { total: 1 } })], 5);
+  const second = usageContext([assistant("b", { input: 7, cost: { total: 2 } })], 5);
+
+  assert.equal(computeUsage(first).input, 100);
+  assert.equal(computeUsage(second).input, 7);
+  // Re-reading the first context must not hand back the second context's totals.
+  assert.equal(computeUsage(first).input, 100);
+  assert.equal(computeUsage(first).cost, 1);
+});
+
+test("a missing or non-finite context reading degrades to a null percent", () => {
+  assert.equal(computeUsage(usageContext([], null)).contextPercent, null);
+
+  const nonFinite = {
+    ...(usageContext([], 5) as unknown as Record<string, unknown>),
+    getContextUsage: () => ({ tokens: 1, contextWindow: 200_000, percent: Number.NaN }),
+  } as never;
+  assert.equal(computeUsage(nonFinite).contextPercent, null);
+
+  // Falls back to the model's declared window when the reading omits one.
+  const noWindow = {
+    ...(usageContext([], 5) as unknown as Record<string, unknown>),
+    getContextUsage: () => ({ tokens: 1, percent: 5 }),
+  } as never;
+  assert.equal(computeUsage(noWindow).contextWindow, 200_000);
 });
 
 test("status rows accept only non-empty string values", () => {
-  const malformed = {
-    ...footer,
-    getExtensionStatuses: () => new Map<any, any>([
-      ["empty", " \n "],
-      ["number", 12],
-      ["good", "  healthy\nnow  "],
-      [7, "bad key"],
-    ]),
-  };
-  assert.deepEqual(validExtensionStatuses(malformed), ["healthy now"]);
+  const statuses = new Map<string, unknown>([
+    ["b", "second"],
+    ["a", "first"],
+    ["blank", "   "],
+    ["newlines", "one\ntwo\tthree"],
+    ["wrong-type", 42],
+  ]);
+  const footer = {
+    getGitBranch: () => null,
+    getExtensionStatuses: () => statuses,
+    getAvailableProviderCount: () => 1,
+    onBranchChange: () => () => {},
+  } as never;
+
+  // Sorted by key, blanks and non-strings dropped, whitespace collapsed.
+  assert.deepEqual(validExtensionStatuses(footer), ["first", "second", "one two three"]);
+  assert.deepEqual(validExtensionStatuses(null), []);
 });

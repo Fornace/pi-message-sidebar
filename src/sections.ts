@@ -8,12 +8,12 @@ import type { ThreadGoal } from "./goal.ts";
 import { computeUsage } from "./status-dock.ts";
 import {
   BG,
+  BG_GOAL,
   BOLD,
   FG_BRIGHT,
   FG_ERR,
   FG_FAINT,
   FG_INFO,
-  FG_MID,
   FG_PRIMARY,
   FG_RULE,
   FG_SECONDARY,
@@ -29,7 +29,11 @@ import {
   formatTokens,
 } from "./style.ts";
 
-/** Content width inside the rail: 42 columns minus the boundary and the two pads. */
+/**
+ * Content width inside the rail: 42 columns minus the boundary and the two
+ * pads. Every budget below measures against this, so a right-aligned element
+ * lands one pad short of the rail edge.
+ */
 export const RAIL_CONTENT = 39;
 
 /** Cells a rail row paints to the right of the boundary: pad + content + pad. */
@@ -48,7 +52,7 @@ export function ruleRow(width = RAIL_CONTENT): string {
 function labelRow(label: string, bg: string, right?: string): string {
   if (right === undefined) return railRow(`${FG_SECONDARY}${label}${RST}`, bg);
   const leftWidth = visibleWidth(label);
-  const gap = Math.max(1, RAIL_CONTENT - 2 - leftWidth - visibleWidth(right));
+  const gap = Math.max(1, RAIL_CONTENT - leftWidth - visibleWidth(right));
   return railRow(`${FG_SECONDARY}${label}${RST}${" ".repeat(gap)}${right}`, bg);
 }
 
@@ -71,7 +75,7 @@ export function renderGoalSection(goal: ThreadGoal | null, rows: number, width =
   if (rows <= 0) return [];
   const lines: string[] = [];
   const push = (line: string) => { if (lines.length < rows) lines.push(line); };
-  const bg = "\x1b[48;5;236m";
+  const bg = BG_GOAL;
 
   if (!goal) {
     push(railRow("", bg, width));
@@ -89,11 +93,13 @@ export function renderGoalSection(goal: ThreadGoal | null, rows: number, width =
     ? `${overBudget ? FG_ERR : FG_BRIGHT}${formatTokens(goal.usage.tokensUsed)} / ${formatTokens(goal.tokenBudget)} tokens used${RST}`
     : `${FG_BRIGHT}${formatTokens(goal.usage.tokensUsed)} tokens used${RST} ${FG_FAINT}· unlimited${RST}`;
 
-  const titleWrap = Math.max(1, width - 2);
+  const titleWrap = Math.max(1, width);
   const titleLines: string[] = [];
   const words = goal.objective.replace(/\s+/g, " ").trim().split(" ");
   let current = "";
-  for (const word of words) {
+  let wordIndex = 0;
+  for (; wordIndex < words.length; wordIndex++) {
+    const word = words[wordIndex]!;
     const candidate = current ? `${current} ${word}` : word;
     if (visibleWidth(candidate) > titleWrap && current) {
       titleLines.push(current);
@@ -103,8 +109,15 @@ export function renderGoalSection(goal: ThreadGoal | null, rows: number, width =
       current = candidate;
     }
   }
-  if (titleLines.length < 2 && current) titleLines.push(current);
-  const truncatedObjective = words.join(" ");
+  if (titleLines.length < 2 && current) {
+    titleLines.push(current);
+    wordIndex++;
+  }
+  if (titleLines.length === 2 && wordIndex < words.length) {
+    const rest = words.slice(wordIndex).join(" ");
+    const combined = `${titleLines[1]} ${rest}`;
+    titleLines[1] = truncateToWidth(combined, titleWrap, "…");
+  }
 
   // Spacious layout: blank, label, blank, 2 title rows, blank, status, budget, blank.
   push(railRow("", bg, width));
@@ -115,7 +128,7 @@ export function renderGoalSection(goal: ThreadGoal | null, rows: number, width =
   if (rows >= 9) push(railRow("", bg, width));
   // Status left, elapsed right on one row.
   const elapsedCells = visibleWidth(`${formatElapsed(goal.usage.activeSeconds)} elapsed`);
-  const gap = Math.max(1, width - 2 - visibleWidth(`${status.icon} ${status.label}`) - elapsedCells - 1);
+  const gap = Math.max(1, width - visibleWidth(`${status.icon} ${status.label}`) - elapsedCells);
   push(railRow(`${statusText}${" ".repeat(gap)}${elapsedText}`, bg, width));
   push(railRow(budgetText, bg, width));
   while (lines.length < rows) push(railRow("", bg, width));
@@ -139,16 +152,16 @@ export function renderSessionSection(
   const surface = cmux?.surfaceRef ?? "surface n/a";
   const workspace = cmux?.workspaceTitle ?? cmux?.workspaceRef ?? "";
   const identityRow = workspace
-    ? `${FG_INFO}${surface}${RST} ${FG_FAINT}·${RST} ${FG_PRIMARY}${truncateToWidth(workspace, Math.max(1, width - 2 - visibleWidth(surface) - 3), "…")}${RST}`
+    ? `${FG_INFO}${surface}${RST} ${FG_FAINT}·${RST} ${FG_PRIMARY}${truncateToWidth(workspace, Math.max(1, width - visibleWidth(surface) - 3), "…")}${RST}`
     : `${FG_INFO}${surface}${RST}`;
   push(railRow(identityRow, BG, width));
-  push(railRow(`${FG_PRIMARY}${ellipsizePath(formatCwd(ctx.sessionManager.getCwd()), width - 2)}${RST}`, BG, width));
+  push(railRow(`${FG_PRIMARY}${ellipsizePath(formatCwd(ctx.sessionManager.getCwd()), width)}${RST}`, BG, width));
   if (rows >= 4) {
     const branch = footerData?.getGitBranch() ?? null;
     const sessionId = ctx.sessionManager.getSessionId().replace(/-/g, "").slice(0, 8);
     const sessionPart = `${FG_FAINT}session${RST} ${FG_PRIMARY}${sessionId}${RST}`;
     if (branch) {
-      const branchBudget = Math.max(1, width - 2 - visibleWidth("branch ") - 3 - visibleWidth(`session ${sessionId}`));
+      const branchBudget = Math.max(1, width - visibleWidth("branch ") - 3 - visibleWidth(`session ${sessionId}`));
       push(railRow(`${FG_FAINT}branch${RST} ${FG_PRIMARY}${truncateToWidth(branch, branchBudget, "…")}${RST} ${FG_FAINT}·${RST} ${sessionPart}`, BG, width));
     } else {
       push(railRow(sessionPart, BG, width));
@@ -174,7 +187,7 @@ export function renderRuntimeSection(
   const model = ctx.model;
   if (model) {
     const provider = footerData && footerData.getAvailableProviderCount() > 1 ? `${model.provider}/` : "";
-    push(railRow(`${FG_SECONDARY}${truncateToWidth(`${provider}${model.id}`, width - 2, "…")}${RST}`, BG, width));
+    push(railRow(`${FG_SECONDARY}${truncateToWidth(`${provider}${model.id}`, width, "…")}${RST}`, BG, width));
   }
   const usage = computeUsage(ctx);
   const percent = usage.contextPercent === null ? "?" : `${Math.round(usage.contextPercent)}%`;

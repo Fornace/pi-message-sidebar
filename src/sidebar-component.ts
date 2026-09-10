@@ -21,6 +21,8 @@ import {
 } from "./sections.ts";
 import {
   BG,
+  BG_DETAIL,
+  BG_HINT,
   BG_SEL,
   BOLD,
   FG_ACC,
@@ -36,7 +38,9 @@ import {
   wrapText,
 } from "./style.ts";
 
-export type UserMessage = { id: string; text: string; index: number; timestamp: string };
+import type { UserMessage } from "./types.ts";
+
+export type { UserMessage };
 
 type SidebarOptions = {
   tui: TUI;
@@ -95,12 +99,25 @@ function allocate(height: number, hasGoal: boolean): Layout | null {
   return { goal, session, runtime, messages: MANDATORY.messages + spare };
 }
 
+/** Cells the selection marker occupies in front of a message title. */
+const MESSAGE_PREFIX_CELLS = 2;
+
+function detailCapacity(rows: number, wrappedCount: number): { textCapacity: number; hasIndicator: boolean; maxScroll: number } {
+  const available = Math.max(0, rows - 1);
+  if (wrappedCount <= available) {
+    return { textCapacity: available, hasIndicator: false, maxScroll: 0 };
+  }
+  const textCapacity = Math.max(1, available - 1);
+  const maxScroll = Math.max(0, wrappedCount - textCapacity);
+  return { textCapacity, hasIndicator: true, maxScroll };
+}
+
 export class SidebarComponent implements Component {
   private focused = false;
   private selectedId: string | null;
   private detailId: string | null = null;
   private detailScroll = 0;
-  private readonly expandedIds = new Set<string>();
+  private lastDetailRows = 1;
   private followTail = true;
   private messages: UserMessage[];
   private version = 0;
@@ -108,6 +125,7 @@ export class SidebarComponent implements Component {
   private cachedSignature = "";
   private cachedLines: string[] = [];
   private viewportStartId: string | null = null;
+  private wrapCache: { id: string; lines: string[] } | null = null;
 
   constructor(private readonly options: SidebarOptions) {
     this.messages = options.messages;
@@ -117,7 +135,7 @@ export class SidebarComponent implements Component {
   isFocused(): boolean { return this.focused; }
   getSelectedMessageId(): string | null { return this.selectedId; }
   isFollowingTail(): boolean { return this.followTail; }
-  isExpanded(messageId: string): boolean { return this.expandedIds.has(messageId) || this.detailId === messageId; }
+  isExpanded(messageId: string): boolean { return this.detailId === messageId; }
   isDetailOpen(): boolean { return this.detailId !== null; }
 
   setFocused(focused: boolean): void {
@@ -140,7 +158,6 @@ export class SidebarComponent implements Component {
     const previousStartId = this.viewportStartId;
     this.messages = messages;
     const ids = new Set(messages.map((message) => message.id));
-    for (const id of this.expandedIds) if (!ids.has(id)) this.expandedIds.delete(id);
     if (this.detailId && !ids.has(this.detailId)) { this.detailId = null; this.detailScroll = 0; }
     this.viewportStartId = previousStartId && ids.has(previousStartId) ? previousStartId : null;
 
@@ -242,7 +259,8 @@ export class SidebarComponent implements Component {
 
   private renderMessages(rows: number): string[] {
     const total = this.messages.length;
-    const position = this.selectedIndex() + 1;
+    const detailIndex = this.detailId ? this.indexForId(this.detailId) : -1;
+    const position = detailIndex >= 0 ? detailIndex + 1 : this.selectedIndex() + 1;
     const heading = this.detailId
       ? this.headingRow("MESSAGE", `${position}/${total}`)
       : this.headingRow("MESSAGES", total > 0 ? `${position}/${total}` : "0/0");
@@ -262,12 +280,12 @@ export class SidebarComponent implements Component {
 
   private headingRow(label: string, right: string): string {
     const leftWidth = visibleWidth(label);
-    const gap = Math.max(1, RAIL_CONTENT - 2 - leftWidth - visibleWidth(right));
+    const gap = Math.max(1, RAIL_CONTENT - leftWidth - visibleWidth(right));
     return railRow(`${FG_SECONDARY}${label}${RST}${" ".repeat(gap)}${FG_FAINT}${right}${RST}`, BG);
   }
 
   private hintRow(text: string): string {
-    return railRow(`${FG_DIM}${text}${RST}`, "\x1b[48;5;233m");
+    return railRow(`${FG_DIM}${text}${RST}`, BG_HINT);
   }
 
   private renderViewport(rows: number): string[] {
@@ -295,7 +313,7 @@ export class SidebarComponent implements Component {
     const selected = message.id === this.selectedId;
     const title = this.options.getTitle(message.id, message.text);
     const prefix = selected && this.focused ? `${FG_ACC}›${RST} ` : "  ";
-    const titleWidth = RAIL_CONTENT - 3;
+    const titleWidth = RAIL_CONTENT - MESSAGE_PREFIX_CELLS;
     const body = `${selected ? FG_BRIGHT : FG_PRIMARY}${truncateToWidth(title, titleWidth, "…")}${RST}`;
     return `${FG_FAINT}│${RST}${fillRow(` ${prefix}${body}`, railFill(), selected ? BG_SEL : BG)}`;
   }
@@ -303,24 +321,35 @@ export class SidebarComponent implements Component {
   private renderDetail(messageId: string, rows: number): string[] {
     const message = this.messages[this.indexForId(messageId)];
     if (!message) return [railRow(`${FG_DIM}Message unavailable${RST}`, BG)];
+    this.lastDetailRows = rows;
     const header = railRow(`${FG_FAINT}#${message.index} ${formatTime(message.timestamp)}${RST}`, BG);
-    const wrapped = wrapText(message.text, RAIL_CONTENT - 3);
-    const maxScroll = Math.max(0, wrapped.length - rows + 1);
+    const wrapped = this.wrappedDetail(message);
+    const { textCapacity, hasIndicator, maxScroll } = detailCapacity(rows, wrapped.length);
     this.detailScroll = Math.max(0, Math.min(this.detailScroll, maxScroll));
-    const visible = wrapped.slice(this.detailScroll, this.detailScroll + rows - 1);
-    const lines = [header, ...visible.map((line) => railRow(`${FG_EXP}${line}${RST}`, "\x1b[48;5;235m"))];
-    if (wrapped.length > visible.length) {
-      lines.push(railRow(`${FG_DIM}…${wrapped.length - this.detailScroll - visible.length} more lines · ↑↓ scroll${RST}`, "\x1b[48;5;235m"));
+    const visible = wrapped.slice(this.detailScroll, this.detailScroll + textCapacity);
+    const lines = [header, ...visible.map((line) => railRow(`${FG_EXP}${line}${RST}`, BG_DETAIL))];
+    if (hasIndicator) {
+      const first = visible.length > 0 ? this.detailScroll + 1 : 0;
+      const last = this.detailScroll + visible.length;
+      lines.push(railRow(`${FG_DIM}${first}-${last} of ${wrapped.length} · ↑↓ scroll${RST}`, BG_DETAIL));
     }
-    while (lines.length < rows) lines.push(railRow("", "\x1b[48;5;235m"));
+    while (lines.length < rows) lines.push(railRow("", BG_DETAIL));
     return lines.slice(0, rows);
+  }
+
+  /** Wrapping is O(message length); a detail stays open across many keystrokes and renders. */
+  private wrappedDetail(message: UserMessage): string[] {
+    if (this.wrapCache?.id !== message.id) {
+      this.wrapCache = { id: message.id, lines: wrapText(message.text, RAIL_CONTENT) };
+    }
+    return this.wrapCache.lines;
   }
 
   private handleDetailInput(data: string): void {
     const message = this.messages[this.indexForId(this.detailId)];
     if (!message) { this.detailId = null; return; }
-    const wrapped = wrapText(message.text, RAIL_CONTENT - 3);
-    const maxScroll = Math.max(0, wrapped.length - 1);
+    const wrapped = this.wrappedDetail(message);
+    const { maxScroll } = detailCapacity(this.lastDetailRows, wrapped.length);
     if (matchesKey(data, "up") || matchesKey(data, "pageUp")) {
       this.detailScroll = Math.max(0, this.detailScroll - (matchesKey(data, "pageUp") ? 10 : 1));
     } else if (matchesKey(data, "down") || matchesKey(data, "pageDown")) {

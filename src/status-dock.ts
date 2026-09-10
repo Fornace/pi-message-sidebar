@@ -2,32 +2,9 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { CmuxContext } from "./cmux.ts";
-import { readSessionGoal, type ThreadGoal } from "./goal.ts";
-import {
-  BG,
-  BG_HDR,
-  FG_ACC,
-  FG_BRIGHT,
-  FG_DIM,
-  FG_ERR,
-  FG_FAINT,
-  FG_INFO,
-  FG_MID,
-  FG_OK,
-  FG_WARN,
-  RST,
-  contextColor,
-  fillRow,
-  formatCwd,
-  formatDuration,
-  formatTokens,
-  sanitizeStatusText,
-  wrapText,
-} from "./style.ts";
+import { sanitizeStatusText } from "./style.ts";
 
-type UsageTotals = {
+export type UsageTotals = {
   input: number;
   output: number;
   cacheRead: number;
@@ -36,7 +13,7 @@ type UsageTotals = {
   latestCacheHitRate?: number;
 };
 
-type Usage = UsageTotals & {
+export type Usage = UsageTotals & {
   contextPercent: number | null;
   contextWindow: number;
 };
@@ -85,64 +62,6 @@ export function computeUsage(ctx: ExtensionContext): Usage {
   };
 }
 
-function row(width: number, label: string, value: string, background = BG): string {
-  const prefix = ` ${FG_FAINT}${label}${RST} `;
-  return fillRow(`${prefix}${truncateToWidth(value, Math.max(0, width - visibleWidth(prefix)), "…")}`, width, background);
-}
-
-function goalStatus(goal: ThreadGoal): { icon: string; color: string; label: string } {
-  switch (goal.status) {
-    case "active": return { icon: "●", color: FG_ACC, label: "active" };
-    case "paused": return { icon: "○", color: FG_DIM, label: "paused" };
-    case "budgetLimited": return { icon: "▲", color: FG_WARN, label: "budget" };
-    case "complete": return { icon: "✓", color: FG_OK, label: "done" };
-  }
-}
-
-function renderGoal(width: number, goal: ThreadGoal, objectiveLines: number): string[] {
-  const status = goalStatus(goal);
-  const budget = goal.tokenBudget
-    ? `${formatTokens(goal.usage.tokensUsed)}/${formatTokens(goal.tokenBudget)}`
-    : `${formatTokens(goal.usage.tokensUsed)}`;
-  const overBudget = goal.tokenBudget !== null && goal.usage.tokensUsed > goal.tokenBudget;
-  const metadata = `${status.color}${status.icon} ${status.label}${RST} ${overBudget ? FG_ERR : FG_MID}${budget}${RST} ${FG_FAINT}${formatDuration(goal.usage.activeSeconds)}${RST}`;
-  const objective = wrapText(goal.objective, Math.max(1, width - 4));
-  const lines = [fillRow(` ${metadata}`, width, BG)];
-  for (const line of objective.slice(0, Math.max(0, objectiveLines))) lines.push(fillRow(`   ${FG_BRIGHT}${line}${RST}`, width, BG));
-  return lines;
-}
-
-function renderWorkspace(width: number, ctx: ExtensionContext, footerData: ReadonlyFooterDataProvider | null): string {
-  const branch = footerData?.getGitBranch();
-  const sessionName = ctx.sessionManager.getSessionName();
-  const parts = [
-    `${FG_BRIGHT}${formatCwd(ctx.sessionManager.getCwd())}${RST}`,
-    branch ? `${FG_INFO}${branch}${RST}` : undefined,
-    sessionName ? `${FG_MID}${sessionName}${RST}` : undefined,
-  ].filter(Boolean).join(` ${FG_FAINT}·${RST} `);
-  return row(width, "cwd", parts);
-}
-
-function renderCmux(width: number, cmux: CmuxContext): string {
-  // Operational identity first: the surface ref never truncates away.
-  const surface = cmux.surfaceRef ?? "";
-  const separator = surface ? ` ${FG_FAINT}·${RST} ` : "";
-  const titleText = cmux.workspaceTitle ?? cmux.workspaceRef ?? "";
-  const titleBudget = Math.max(0, width - 2 - visibleWidth(surface) - visibleWidth(separator));
-  const title = truncateToWidth(titleText, titleBudget, "…");
-  return fillRow(` ${FG_INFO}${surface}${RST}${separator}${FG_BRIGHT}${title}${RST}`, width, BG);
-}
-
-function renderRuntime(width: number, ctx: ExtensionContext, footerData: ReadonlyFooterDataProvider | null, thinkingLevel: string, usage: Usage): string | null {
-  const model = ctx.model;
-  if (!model) return null;
-  const provider = footerData && footerData.getAvailableProviderCount() > 1 ? `${model.provider}/` : "";
-  const thinking = model.reasoning ? ` ${FG_FAINT}·${RST} ${FG_MID}${thinkingLevel}${RST}` : "";
-  const percent = usage.contextPercent === null ? "?" : `${usage.contextPercent.toFixed(0)}%`;
-  const context = `${contextColor(usage.contextPercent)}${percent}/${formatTokens(usage.contextWindow)}${RST}`;
-  return row(width, "run", `${FG_BRIGHT}${provider}${model.id}${RST}${thinking} ${FG_FAINT}·${RST} ${context}`);
-}
-
 export function validExtensionStatuses(footerData: ReadonlyFooterDataProvider | null): string[] {
   if (!footerData) return [];
   const statuses = footerData.getExtensionStatuses();
@@ -154,55 +73,4 @@ export function validExtensionStatuses(footerData: ReadonlyFooterDataProvider | 
     if (text) valid.push([entry[0], text]);
   }
   return valid.sort(([a], [b]) => a.localeCompare(b)).map(([, text]) => text);
-}
-
-export function renderStatusDock(
-  width: number,
-  ctx: ExtensionContext,
-  footerData: ReadonlyFooterDataProvider | null,
-  thinkingLevel: string,
-  focused: boolean,
-  getCmuxContext: () => CmuxContext | null,
-  maxRows = 5,
-): string[] {
-  const limit = Math.max(0, Math.min(5, Math.floor(maxRows)));
-  if (limit === 0) return [];
-  const hint = fillRow(
-    ` ${FG_DIM}${focused ? "↑↓ move  Enter open  c copy  Esc close" : "Ctrl+Shift+H focus"}${RST}`,
-    width,
-    BG_HDR,
-  );
-  if (limit === 1) return [hint];
-
-  const usage = computeUsage(ctx);
-  const goal = readSessionGoal(ctx);
-  const cmux = getCmuxContext();
-
-  // Priority order: identity, goal status, first objective line, runtime, then
-  // the second objective line. Truncation drops the least important rows last.
-  const rows: string[] = [];
-  const push = (line: string | string[] | null): boolean => {
-    if (!line) return true;
-    const added = Array.isArray(line) ? line : [line];
-    if (rows.length + added.length > limit - 1) return false;
-    rows.push(...added);
-    return true;
-  };
-  if (cmux) push(renderCmux(width, cmux));
-  else if (!goal) push(renderWorkspace(width, ctx, footerData));
-  if (goal) {
-    if (!push(renderGoal(width, goal, 1)) && rows.length + 1 <= limit - 1) {
-      // Degrade to goal status without the objective line before dropping it entirely.
-      rows.push(...renderGoal(width, goal, 0));
-    }
-    const runtime = renderRuntime(width, ctx, footerData, thinkingLevel, usage);
-    if (!push(runtime)) return [...rows.slice(0, limit - 1), hint];
-    push(renderGoal(width, goal, 2).slice(2));
-  } else {
-    push(renderRuntime(width, ctx, footerData, thinkingLevel, usage));
-    const status = validExtensionStatuses(footerData)[0];
-    if (status) push(row(width, "stat", `${FG_MID}${status}${RST}`));
-  }
-
-  return [...rows.slice(0, limit - 1), hint];
 }
