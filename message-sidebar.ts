@@ -26,12 +26,12 @@ function extractUserText(message: { content: unknown }): string {
 
 export function collectUserMessages(ctx: ExtensionContext): UserMessage[] {
   const messages: UserMessage[] = [];
-  let index = 0;
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type !== "message" || entry.message.role !== "user") continue;
-    index++;
     const text = extractUserText(entry.message).trim();
-    if (text) messages.push({ id: entry.id, text, index, timestamp: entry.timestamp });
+    // A user turn with no text (image-only, say) is not shown, so it must not
+    // consume an ordinal: the detail's "#N" has to match the heading's "N/total".
+    if (text) messages.push({ id: entry.id, text, index: messages.length + 1, timestamp: entry.timestamp });
   }
   return messages;
 }
@@ -97,6 +97,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     cachedContext = ctx;
+    titles?.dispose();
     titles = new TitleService(
       ctx.sessionManager.getSessionId(),
       () => scheduleRefresh(ctx),
@@ -144,14 +145,9 @@ export default function messageSidebar(pi: ExtensionAPI): void {
         return undefined;
       }
       if (tui && isViewportTUI(tui)) return undefined;
-      if (matchesKey(data, "escape") && sidebar?.isFocused()) {
-        // The component owns Escape while focused: it closes an open message
-        // detail first and only unfocuses on the second press.
-        sidebar.handleInput(data);
-        tui?.requestRender();
-        return { consume: true };
-      }
       if (sidebar?.isFocused()) {
+        // The component owns every key while focused, Escape included: it
+        // closes an open message detail first and unfocuses on the second press.
         sidebar.handleInput(data);
         return { consume: true };
       }
