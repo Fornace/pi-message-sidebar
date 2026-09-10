@@ -10,7 +10,7 @@ import { resolveCmuxContext } from "./src/cmux.ts";
 import { isSidebarVisible } from "./src/constants.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
 import { SidebarComponent } from "./src/sidebar-component.ts";
-import { SummaryService, fallbackSummary } from "./src/summaries.ts";
+import { isGatewayConfigured, SummaryService, fallbackSummary } from "./src/summaries.ts";
 import type { UserMessage } from "./src/types.ts";
 
 function extractUserText(message: { content: unknown }): string {
@@ -119,7 +119,9 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           getFooterData: () => footerData,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getCmuxContext: () => cmuxContext,
-          getTitle: (messageId, text) => summaries?.get(messageId, text) ?? fallbackSummary(text),
+          getSummary: (messageId, text) => summaries?.get(messageId, text) ?? fallbackSummary(text),
+          hasSummary: (messageId) => summaries?.hasSummary(messageId) ?? false,
+          summariesConfigured: isGatewayConfigured,
           messages: collectUserMessages(ctx),
         });
         return new SidebarLayoutBridge(currentTui, sidebar);

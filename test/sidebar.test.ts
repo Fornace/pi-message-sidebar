@@ -69,7 +69,9 @@ function makeSidebar(options: {
   goal?: { objective: string; status: string; tokensUsed: number; tokenBudget: number; activeSeconds: number };
   cmux?: { workspaceTitle: string | null; workspaceRef: string | null; surfaceRef: string | null } | null;
   branch?: string | null;
-  getTitle?: (id: string, text: string) => string;
+  getSummary?: (id: string, text: string) => string;
+  hasSummary?: (id: string) => boolean;
+  summariesConfigured?: boolean;
 }) {
   const rows = options.rows ?? 30;
   return new SidebarComponent({
@@ -84,7 +86,9 @@ function makeSidebar(options: {
       getAvailableProviderCount: () => 2,
       onBranchChange: () => () => {},
     }),
-    getTitle: options.getTitle ?? ((_id, text) => fallbackSummary(text)),
+    getSummary: options.getSummary ?? ((_id, text) => fallbackSummary(text)),
+    hasSummary: options.hasSummary ?? (() => true),
+    summariesConfigured: () => options.summariesConfigured ?? true,
   });
 }
 
@@ -170,22 +174,25 @@ test("session section shows surface ref, cwd identity, branch, and session id", 
 
 test("message rows show one title per row with fallback", () => {
   const summaries = new Map([
-    ["id-0", "Custom Title Zero"],
-    ["id-1", "Custom Title One"],
+    ["id-0", "Fix the rail row budget so sections fill"],
+    ["id-1", "Add a fuzz harness for the wrap cache"],
   ]);
   const sidebar = makeSidebar({
     messages: sampleMessages(2),
     rows: 25,
-    getTitle: (id, text) => summaries.get(id) ?? fallbackSummary(text),
+    getSummary: (id, text) => summaries.get(id) ?? fallbackSummary(text),
   });
 
   const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
-  const zeroRow = clean.find((l) => l.includes("Custom Title Zero"));
-  const oneRow = clean.find((l) => l.includes("Custom Title One"));
-  assert.ok(zeroRow, "Custom title zero must appear");
-  assert.ok(oneRow, "Custom title one must appear");
+  const zeroRow = clean.find((l) => l.includes("Fix the rail row budget"));
+  const oneRow = clean.find((l) => l.includes("Add a fuzz harness"));
+  assert.ok(zeroRow, "Summary zero must appear");
+  assert.ok(oneRow, "Summary one must appear");
 
-  // One title per row, right-aligned pos/total in heading
+  // Structured rows: ordinal and time precede the summary text
+  assert.match(zeroRow, / 1 12:00 Fix the rail row budget/);
+
+  // Right-aligned pos/total in heading
   const heading = clean.find((l) => l.includes("MESSAGES"));
   assert.ok(heading);
   assert.match(heading, /MESSAGES\s+2\/2/);
@@ -328,7 +335,7 @@ test("a message that leaves the branch under an open detail does not break the h
   assert.equal(sidebar.isDetailOpen(), true);
 
   // Compaction or a branch switch can drop the message the detail is showing.
-  (sidebar as unknown as { messages: UserMessage[] }).messages = [];
+  (sidebar as unknown as { panel: { messages: UserMessage[] } }).panel.messages = [];
   sidebar.invalidate();
   const lines = sidebar.render(SIDEBAR_WIDTH);
   assert.equal(lines.length, 30);
