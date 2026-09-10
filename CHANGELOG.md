@@ -5,6 +5,7 @@
 > Goal-first rail with model-written message titles. Replaces the bottom status dock with stacked sections.
 
 - Message rows now show a short generated title instead of the raw prompt: `TitleService` calls `fornace-flash` through the Fornace gateway, caches per session on disk, and falls back to a deterministic first-words title when the gateway is unavailable or unconfigured. Titles never generate on the render path. Title generation that fails while the gateway is configured reports once per session instead of silently degrading, and a replaced service is disposed on session restart.
+- Each message now actually receives its one refinement pass on a later turn; the previous cadence only ever inspected the newest message, so refinement never fired in normal use.
 - Rail is now GOAL / SESSION / MESSAGES / runtime, top to bottom, replacing the bottom status dock.
 - Fixed the crash on any populated render: the extension never passed `getTitle`, so `SidebarComponent.renderMessageRow` threw `TypeError: this.options.getTitle is not a function` and took the TUI down.
 - Rail rows paint all 42 columns; they previously painted 40 and left a two-column seam down the rail.
