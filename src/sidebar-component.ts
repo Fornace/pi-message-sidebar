@@ -240,19 +240,19 @@ export class SidebarComponent implements Component {
     lines.push(...this.renderMessages(layout.messages));
     lines.push(ruleRow());
     lines.push(...renderRuntimeSection(ctx, this.options.getFooterData(), this.options.getThinkingLevel(), layout.runtime));
-    return lines.slice(0, height);
+    return lines;
   }
 
   /** Bounded to the width actually offered, so a narrow slot never overflows its column. */
   private renderNotice(width: number, height: number, hasGoal: boolean): string[] {
     const row = (text: string) =>
       width <= 1 ? fillRow("", width, BG) : `${FG_FAINT}│${RST}${fillRow(` ${text}`, width - 1, BG)}`;
-    const lines = [
-      row(`${BOLD}${FG_BRIGHT}Sidebar${RST}`),
-      row(`${FG_DIM}needs ${SIDEBAR_WIDTH}×${minimumHeight(hasGoal)}${RST}`),
-    ];
+    const lines: string[] = [];
+    const push = (text: string) => { if (lines.length < height) lines.push(row(text)); };
+    push(`${BOLD}${FG_BRIGHT}Sidebar${RST}`);
+    push(`${FG_DIM}needs ${SIDEBAR_WIDTH}×${minimumHeight(hasGoal)}${RST}`);
     while (lines.length < height) lines.push(row(""));
-    return lines.slice(0, height);
+    return lines;
   }
 
   // --- messages -----------------------------------------------------------
@@ -267,15 +267,14 @@ export class SidebarComponent implements Component {
 
     if (this.detailId) {
       const detail = this.renderDetail(this.detailId, Math.max(1, rows - 2));
-      return [heading, ...detail, this.hintRow("Esc back · ↑↓ scroll")].slice(0, rows);
+      return [heading, ...detail, this.hintRow("Esc back · ↑↓ scroll")];
     }
 
     const blank = rows >= 4;
     const viewportRows = Math.max(1, rows - (blank ? 3 : 2));
     const viewport = this.renderViewport(viewportRows);
     const sections = [heading, ...(blank ? [railRow("", BG)] : []), ...viewport, this.hintRow(this.focused ? "↑↓ select · Enter open · c copy" : "Ctrl+Shift+H focus")];
-    while (sections.length < rows) sections.splice(sections.length - 1, 0, railRow("", BG));
-    return sections.slice(0, rows);
+    return sections;
   }
 
   private headingRow(label: string, right: string): string {
@@ -288,8 +287,13 @@ export class SidebarComponent implements Component {
     return railRow(`${FG_DIM}${text}${RST}`, BG_HINT);
   }
 
+  /** Always returns exactly `rows` lines, so the message section's arithmetic stays exact. */
   private renderViewport(rows: number): string[] {
-    if (this.messages.length === 0) return [railRow(`${FG_DIM}No messages yet${RST}`, BG)];
+    if (this.messages.length === 0) {
+      const empty = [railRow(`${FG_DIM}No messages yet${RST}`, BG)];
+      while (empty.length < rows) empty.push(railRow("", BG));
+      return empty;
+    }
 
     const selected = this.selectedIndex();
     let start = this.followTail
@@ -320,7 +324,13 @@ export class SidebarComponent implements Component {
 
   private renderDetail(messageId: string, rows: number): string[] {
     const message = this.messages[this.indexForId(messageId)];
-    if (!message) return [railRow(`${FG_DIM}Message unavailable${RST}`, BG)];
+    if (!message) {
+      // The message left the branch under an open detail. Fill the section:
+      // returning a single row would surface as a fatal height mismatch.
+      const lines = [railRow(`${FG_DIM}Message unavailable${RST}`, BG)];
+      while (lines.length < rows) lines.push(railRow("", BG));
+      return lines;
+    }
     this.lastDetailRows = rows;
     const header = railRow(`${FG_FAINT}#${message.index} ${formatTime(message.timestamp)}${RST}`, BG);
     const wrapped = this.wrappedDetail(message);
@@ -334,7 +344,7 @@ export class SidebarComponent implements Component {
       lines.push(railRow(`${FG_DIM}${first}-${last} of ${wrapped.length} · ↑↓ scroll${RST}`, BG_DETAIL));
     }
     while (lines.length < rows) lines.push(railRow("", BG_DETAIL));
-    return lines.slice(0, rows);
+    return lines;
   }
 
   /** Wrapping is O(message length); a detail stays open across many keystrokes and renders. */

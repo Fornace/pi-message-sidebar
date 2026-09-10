@@ -132,7 +132,7 @@ export function renderGoalSection(goal: ThreadGoal | null, rows: number, width =
   push(railRow(`${statusText}${" ".repeat(gap)}${elapsedText}`, bg, width));
   push(railRow(budgetText, bg, width));
   while (lines.length < rows) push(railRow("", bg, width));
-  return lines.slice(0, rows);
+  return lines;
 }
 
 // --- session --------------------------------------------------------------
@@ -168,7 +168,7 @@ export function renderSessionSection(
     }
   }
   while (lines.length < rows) push(railRow("", BG, width));
-  return lines.slice(0, rows);
+  return lines;
 }
 
 // --- runtime --------------------------------------------------------------
@@ -194,5 +194,5 @@ export function renderRuntimeSection(
   const thinking = model?.reasoning ? `${thinkingLevel} ${FG_FAINT}·${RST} ` : "";
   push(railRow(`${FG_SECONDARY}${thinking}ctx ${percent} ${FG_FAINT}·${RST} ${formatCost(usage.cost)}${RST}`, BG, width));
   while (lines.length < rows) push(railRow("", BG, width));
-  return lines.slice(0, rows);
+  return lines;
 }

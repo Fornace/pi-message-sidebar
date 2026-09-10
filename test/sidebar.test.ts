@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { SIDEBAR_WIDTH } from "../src/constants.ts";
-import { SidebarComponent, type UserMessage } from "../src/sidebar-component.ts";
+import { SidebarComponent, minimumHeight, type UserMessage } from "../src/sidebar-component.ts";
 import { fallbackTitle } from "../src/titles.ts";
 
 function stripAnsi(text: string): string {
@@ -87,6 +87,14 @@ function makeSidebar(options: {
     getTitle: options.getTitle ?? ((_id, text) => fallbackTitle(text)),
   });
 }
+
+const GOAL = {
+  objective: "Upgrade the sidebar with a goal recap that keeps every line inside its width",
+  status: "active",
+  tokensUsed: 1_234_567,
+  tokenBudget: 3_000_000,
+  activeSeconds: 2_460,
+};
 
 function sampleMessages(count: number): UserMessage[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -286,4 +294,71 @@ test("expanded messages stay bounded and scrolling works", () => {
   const lines = sidebar.render(SIDEBAR_WIDTH);
   assert.equal(lines.length, 20);
   assert.ok(lines.every((l) => visibleWidth(l) === SIDEBAR_WIDTH));
+});
+
+test("every rail row paints all 42 columns at every viable height", () => {
+  // A short section is not cosmetic: it surfaces as a fatal height mismatch
+  // inside pi's render loop, which is how the getTitle crash took the TUI down.
+  for (const goal of [undefined, GOAL]) {
+    for (const count of [0, 1, 3, 30]) {
+      for (let rows = minimumHeight(Boolean(goal)); rows <= 60; rows++) {
+        const lines = makeSidebar({ messages: sampleMessages(count), rows, goal }).render(SIDEBAR_WIDTH);
+        assert.equal(lines.length, rows, `height at rows=${rows} count=${count} goal=${Boolean(goal)}`);
+        const short = lines.findIndex((l) => visibleWidth(l) !== SIDEBAR_WIDTH);
+        assert.equal(short, -1, `row ${short} is ${visibleWidth(lines[short] ?? "")} wide at rows=${rows} count=${count}`);
+      }
+    }
+  }
+});
+
+test("an empty history still fills the message section", () => {
+  const lines = makeSidebar({ messages: [], rows: 30 }).render(SIDEBAR_WIDTH);
+  assert.equal(lines.length, 30);
+  assert.match(stripAnsi(lines.join("\n")), /No messages yet/);
+  assert.ok(lines.every((l) => visibleWidth(l) === SIDEBAR_WIDTH));
+});
+
+test("a message that leaves the branch under an open detail does not break the height", () => {
+  const history = sampleMessages(1);
+  const sidebar = makeSidebar({ messages: history, rows: 30 });
+  sidebar.setFocused(true);
+  sidebar.handleInput("\r");
+  assert.equal(sidebar.isDetailOpen(), true);
+
+  // Compaction or a branch switch can drop the message the detail is showing.
+  (sidebar as unknown as { messages: UserMessage[] }).messages = [];
+  sidebar.invalidate();
+  const lines = sidebar.render(SIDEBAR_WIDTH);
+  assert.equal(lines.length, 30);
+  assert.match(stripAnsi(lines.join("\n")), /Message unavailable/);
+});
+
+test("the detail scroll indicator reports a truthful range at both ends", () => {
+  const history = [{
+    id: "1", index: 1, timestamp: new Date(2026, 8, 10, 2, 16).toISOString(),
+    text: Array.from({ length: 40 }, (_, i) => `line${i} of a message body that wraps`).join(" "),
+  }];
+  const sidebar = makeSidebar({ messages: history, rows: 24 });
+  sidebar.setFocused(true);
+  sidebar.handleInput("\r");
+
+  const indicator = () => stripAnsi(sidebar.render(SIDEBAR_WIDTH).find((l) => / of \d+ · ↑↓/.test(stripAnsi(l))) ?? "").trim();
+  const atTop = indicator();
+  assert.match(atTop, /^│ 1-\d+ of (\d+) · ↑↓ scroll$/);
+  const total = Number(atTop.match(/of (\d+)/)![1]);
+
+  for (let i = 0; i < 300; i++) sidebar.handleInput("\x1b[B");
+  // At the bottom the last visible line is the last wrapped line — never "0 more".
+  assert.match(indicator(), new RegExp(`-${total} of ${total} · ↑↓ scroll$`));
+
+  for (let i = 0; i < 300; i++) sidebar.handleInput("\x1b[A");
+  assert.equal(indicator(), atTop);
+});
+
+test("a narrow slot never overflows and never leaves a ragged column", () => {
+  for (const width of [1, 2, 8, 16, 24, 35, 41]) {
+    const lines = makeSidebar({ messages: sampleMessages(3), rows: 30 }).render(width);
+    assert.equal(lines.length, 30);
+    assert.ok(lines.every((l) => visibleWidth(l) === width), `width ${width} is ragged`);
+  }
 });
