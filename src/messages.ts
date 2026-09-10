@@ -1,9 +1,9 @@
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import { ARRIVE_MS, DOT_GLYPH, GLOW_MS, arriveProgress, glowStrength, isArriving, isSettling, pulse, settlePhase } from "./anim.ts";
+import { GLOW_MS, isArriving, isSettling } from "./anim.ts";
 import type { Palette } from "./palette.ts";
-import { bgRgb, fgRgb, rgbLerp } from "./palette.ts";
 import { RAIL_CONTENT, ghostHeader, railRow } from "./sections.ts";
-import { RST, clip, formatCount, formatTime, wrapText } from "./style.ts";
+import { RST, formatCount, formatTime, wrapText } from "./style.ts";
+import { slotRows } from "./slots.ts";
 import type { UserMessage } from "./types.ts";
 
 export type { UserMessage };
@@ -20,15 +20,9 @@ type MessagePanelOptions = {
   requestRefresh: () => void;
 };
 
-/** Cells in front of the summary text: marker, time, space. The ordinal is
- *  gone: its four cells buy summary text instead. */
-const META_CELLS = 7;
-const TEXT_CELLS = RAIL_CONTENT - META_CELLS;
 /** One message always occupies a two-row slot: summary line plus its wrap. */
 const ROWS_PER_MESSAGE = 2;
 const SETUP_HINT = "AI summaries need FORNACE_LLM_API_KEY";
-/** Messages this far from the newest read as current; older ones fade. */
-const FRESH_WINDOW = 4;
 
 export function detailCapacity(rows: number, wrappedCount: number): { textCapacity: number; hasIndicator: boolean; maxScroll: number } {
   const available = Math.max(0, rows - 1);
@@ -244,85 +238,15 @@ export class MessagePanel {
 
   private messageRows(index: number, palette: Palette, now: number): string[] {
     const message = this.messages[index]!;
-    const selected = message.id === this.selectedId;
-    const pending = this.options.isPending(message.id);
-    // The selection bar spans both rows of the slot: a two-cell yellow edge.
-    const bar = selected ? `${palette.badgeModified}▎${RST}` : " ";
-    const marker = pending ? this.pendingDot(palette, now) : bar;
-    const secondMarker = pending ? " " : bar;
-    const time = formatTime(message.timestamp).padEnd(5);
-    const meta = `${palette.ghost}${time}${RST} `;
-    const arrived = this.arrivedAt.get(message.id);
-    const progress = arrived === undefined ? 1 : arriveProgress(now, arrived);
-    const text = this.summaryLines(message, progress);
-    const color = this.textColor(message, index, selected, palette, now);
-    const background = this.slotBackground(message, selected, palette, now);
-    const first = `${marker}${meta}${color}${text[0]}${RST}`;
-    const second = `${secondMarker}${" ".repeat(META_CELLS - 1)}${color}${text[1]}${RST}`;
-    return [
-      railRow(palette, first, background),
-      railRow(palette, second, background),
-    ];
-  }
-
-  /**
-   * The slot surface: a focused selection is the soft accent tint, an
-   * unfocused one half of it, and a message whose summary just landed keeps a
-   * decaying glow over the deep canvas. Everything else floats on deep.
-   */
-  private slotBackground(message: UserMessage, selected: boolean, palette: Palette, now: number): string {
-    if (selected) return palette.bgSelect;
-    const landed = this.landedAt.get(message.id);
-    if (landed === undefined || !palette.truecolor || !palette.glowFrom || !palette.glowTo) return palette.bgDeep;
-    const strength = glowStrength(now, landed);
-    return strength > 0 ? bgRgb(rgbLerp(palette.glowTo, palette.glowFrom, strength)) : palette.bgDeep;
-  }
-
-  /** The working dot: a fast pulse while the summary is still in flight. */
-  private pendingDot(palette: Palette, now: number): string {
-    if (palette.truecolor && palette.dotDim && palette.dotPeak) {
-      return `${fgRgb(rgbLerp(palette.dotDim, palette.dotPeak, pulse(now, 0)))}${DOT_GLYPH}${RST}`;
-    }
-    const step = Math.round(pulse(now, 0) * (palette.dotFallback.length - 1));
-    return `${palette.dotFallback[step] ?? palette.ghost}${DOT_GLYPH}${RST}`;
-  }
-
-  /** Age fade like pi-recap: newest bright, recent normal, older muted; a
-   *  landing summary sweeps accent then bold accent before settling. */
-  private textColor(message: UserMessage, index: number, selected: boolean, palette: Palette, now: number): string {
-    const has = this.options.hasSummary(message.id);
-    const was = this.seenSummary.get(message.id);
-    if (has && was === false) this.landedAt.set(message.id, now);
-    this.seenSummary.set(message.id, has);
-
-    const landed = this.landedAt.get(message.id);
-    if (has && landed !== undefined) {
-      const phase = settlePhase(now, landed);
-      if (phase === 1) return palette.accent;
-      if (phase === 2) return palette.bold(palette.accent);
-    }
-    if (selected) return palette.textNew;
-    if (!has) return palette.preview;
-    const distance = this.messages.length - 1 - index;
-    if (distance === 0) return palette.textNew;
-    if (distance <= FRESH_WINDOW) return palette.textMid;
-    return palette.textOld;
-  }
-
-  /** The summary wrapped into the two text cells of a message slot. While a
-   *  slot is arriving, the first line reveals left to right and the second
-   *  waits its turn. */
-  private summaryLines(message: UserMessage, progress = 1): [string, string] {
-    const wrapped = wrapText(this.options.getSummary(message.id, message.text), TEXT_CELLS);
-    if (progress < 1) {
-      const reveal = Math.max(1, Math.floor(progress * TEXT_CELLS));
-      return [clip(wrapped[0] ?? "", reveal), ""];
-    }
-    if (wrapped.length <= 1) return [wrapped[0] ?? "", ""];
-    const second = wrapped.length > 2
-      ? clip(wrapped.slice(1).join(" "), TEXT_CELLS)
-      : wrapped[1]!;
-    return [wrapped[0]!, second];
+    return slotRows(message, index, this.messages.length, message.id === this.selectedId, palette, now, {
+      getSummary: this.options.getSummary,
+      hasSummary: this.options.hasSummary,
+      isPending: this.options.isPending,
+    }, {
+      seenSummary: this.seenSummary,
+      landedAt: this.landedAt,
+      arrivedAt: this.arrivedAt,
+    });
   }
 
   /**
