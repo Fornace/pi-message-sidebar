@@ -73,3 +73,19 @@ test("refresh is throttled so a render storm cannot spawn git", async () => {
   await provider.refresh("/tmp");
   assert.equal(runs, afterFirst, "throttled refreshes must not spawn git again");
 });
+
+test("badges span every repository the session edits, not just the cwd", async () => {
+  const repoA = makeRepo();
+  const repoB = makeRepo();
+  try {
+    writeFileSync(join(repoB.path, "tracked.md"), "changed in the other repo\n");
+    const provider = new GitStatusProvider(0);
+    await provider.refresh(repoA.path, true, [join(repoB.path, "tracked.md")]);
+
+    assert.equal(provider.statusFor(join(repoB.path, "tracked.md")), "M");
+    assert.equal(provider.statusFor(join(repoA.path, "tracked.md")), null);
+  } finally {
+    repoA.cleanup();
+    repoB.cleanup();
+  }
+});

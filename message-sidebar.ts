@@ -109,7 +109,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
       (err) => ctx.ui.notify(err, "warning"),
     );
     summaries.seed(collectUserMessages(ctx));
-    void gitStatus.refresh(ctx.sessionManager.getCwd(), true);
+    void gitStatus.refresh(ctx.sessionManager.getCwd(), true, readSessionFileEdits(ctx).map((file) => file.path));
     void resolveCmuxContext().then((resolved) => {
       cmuxContext = resolved;
       scheduleRefresh(ctx);
@@ -190,11 +190,11 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("turn_end", (_event, ctx) => {
     summaries?.turnCompleted(collectUserMessages(ctx));
-    void gitStatus.refresh(ctx.sessionManager.getCwd());
+    void gitStatus.refresh(ctx.sessionManager.getCwd(), false, readSessionFileEdits(ctx).map((file) => file.path));
     scheduleRefresh(ctx);
   });
   pi.on("agent_end", (_event, ctx) => {
-    void gitStatus.refresh(ctx.sessionManager.getCwd());
+    void gitStatus.refresh(ctx.sessionManager.getCwd(), false, readSessionFileEdits(ctx).map((file) => file.path));
     scheduleRefresh(ctx);
   });
   pi.on("agent_settled", (_event, ctx) => scheduleRefresh(ctx));

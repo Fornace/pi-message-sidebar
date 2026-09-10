@@ -576,3 +576,22 @@ test("focused selection shows a visible one-cell accent marker", () => {
   const other = clean.find((l) => l.includes("unique-message-0"));
   assert.ok(other && !other.includes("›"), "unselected rows must not carry the marker");
 });
+
+test("an absent goal rests on the base background, not the raised slab", () => {
+  const without = makeSidebar({ messages: sampleMessages(2), rows: 30 }).render(SIDEBAR_WIDTH).join("");
+  assert.ok(!without.includes("\x1b[48;5;235m"), "the empty goal state must not claim the raised step");
+
+  const withGoal = makeSidebar({ messages: sampleMessages(2), rows: 30, goal: GOAL }).render(SIDEBAR_WIDTH).join("");
+  assert.ok(withGoal.includes("\x1b[48;5;235m"), "a live goal keeps the raised step");
+});
+
+test("a history shorter than the viewport hugs the hint strip", () => {
+  const rows = 30;
+  const clean = makeSidebar({ messages: sampleMessages(2), rows }).render(SIDEBAR_WIDTH).map(stripAnsi);
+  // Hint sits last; the newest message's slot sits directly above it.
+  // Rail tail is hint, rule, then the three runtime rows.
+  assert.match(clean[rows - 7]!, /unique-message-1/, "the stream must bottom-anchor");
+  assert.match(clean[rows - 9]!, /unique-message-0/);
+  // The spare air collects under the heading, not above the hint.
+  assert.equal(clean[rows - 10]!.trim(), "│");
+});

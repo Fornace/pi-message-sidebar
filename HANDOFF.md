@@ -14,7 +14,7 @@ is for what comes next.
 ```bash
 cd /Users/ffrappo/repos/pi-message-sidebar
 git log --oneline -9          # b86668e..451bc18 is this series
-npm run typecheck && npm test # must be clean / 39 pass
+npm run typecheck && npm test # must be clean / 64 pass
 ```
 
 `~/.pi/agent/extensions/message-sidebar` is a **symlink to this repo**, so pi
@@ -27,14 +27,13 @@ tag push). Defects here reach people who are not Francesco — that is why the
 
 ## State
 
-61 tests: `goal` 9, `sidebar` 26, `summaries` 7, `messages` 5, `files` 3,
-`git-status` 3, `status-dock` 4, `layout` 3. Gates all green at the 1.9.0 tip
-(including the post-review fix commit):
+64 tests: `goal` 10, `sidebar` 27, `summaries` 7, `messages` 5, `files` 3,
+`git-status` 4, `status-dock` 4, `layout` 3. Gates all green at the 1.9.0 tip:
 
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npm run typecheck` | clean |
-| Unit | `npm test` | 61/61 |
+| Unit | `npm test` | 64/64 |
 | Entry point | `npm run test:load` | loads |
 | PTY | `npm run test:pty` | 4/4 |
 | PTY matrix | `npm run test:pty:matrix` | 8/8 |
@@ -164,8 +163,11 @@ current HEAD in every message so the other side can tell whether it is behind.
   hue, Francesco's is pure green) and a three-step background ladder;
   `src/anim.ts` + the panel's `needsAnim` drive a 90 ms tick that exists only
   while a dot pulses or a settle sweep runs; `src/git-status.ts` supplies the
-  M/A/U/D/R badges. The leak invariant (no bare reset before visible text
-  mid-row) is covered by a sidebar test; keep it when touching row assembly.
+  M/A/U/D/R badges across all repositories edited in the session (not just cwd);
+  empty goal states rest on the base background; message streams bottom-anchor
+  when shorter than the viewport so spare air sits under the heading instead of
+  opening a hole above the hint. The leak invariant (no bare reset before visible
+  text mid-row) is covered by a sidebar test; keep it when touching row assembly.
 - `_tmp/latency.mts` is the gateway microbench that replaced pi-bench for
   route selection; `_tmp/preview.mts` renders the rail offline for eyes.
 - The adversarial review (fornace-max critic) found two fatal render crashes

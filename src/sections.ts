@@ -65,7 +65,8 @@ export function renderGoalSection(goal: ThreadGoal | null, rows: number, palette
   if (rows <= 0) return [];
   const lines: string[] = [];
   const push = (line: string) => { if (lines.length < rows) lines.push(line); };
-  const bg = palette.bgRaised;
+  // The raised step is emphasis: a missing goal is a placeholder, not content.
+  const bg = goal ? palette.bgRaised : palette.bgBase;
 
   if (!goal) {
     push(railRow(palette, "", bg, width));

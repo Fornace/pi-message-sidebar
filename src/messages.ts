@@ -205,7 +205,14 @@ export class MessagePanel {
       ...pairs,
       ...(bottomCount ? [this.countRow(palette, this.messages.length - window.end, "later")] : []),
     ];
-    while (lines.length < rows) lines.push(railRow(palette, "", palette.bgBase));
+    // A history shorter than the viewport hugs the hint strip: a message
+    // stream reads bottom-anchored, and the spare air sits under the
+    // heading instead of opening a hole above the hint.
+    if (!topCount && !bottomCount) {
+      while (lines.length < rows) lines.unshift(railRow(palette, "", palette.bgBase));
+    } else {
+      while (lines.length < rows) lines.push(railRow(palette, "", palette.bgBase));
+    }
     return lines.slice(0, rows);
   }
 
