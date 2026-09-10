@@ -10,7 +10,7 @@ import { resolveCmuxContext } from "./src/cmux.ts";
 import { isSidebarVisible } from "./src/constants.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
 import { SidebarComponent } from "./src/sidebar-component.ts";
-import { fallbackTitle, TitleService } from "./src/titles.ts";
+import { SummaryService, fallbackSummary } from "./src/summaries.ts";
 import type { UserMessage } from "./src/types.ts";
 
 function extractUserText(message: { content: unknown }): string {
@@ -66,7 +66,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   let cachedContext: ExtensionContext | null = null;
   let footerData: ReadonlyFooterDataProvider | null = null;
   let cmuxContext: CmuxContext | null = null;
-  let titles: TitleService | null = null;
+  let summaries: SummaryService | null = null;
   let refreshQueued = false;
 
   const scheduleRefresh = (ctx: ExtensionContext | null = cachedContext) => {
@@ -97,14 +97,14 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     cachedContext = ctx;
-    titles?.dispose();
-    titles = new TitleService(
+    summaries?.dispose();
+    summaries = new SummaryService(
       ctx.sessionManager.getSessionId(),
       () => scheduleRefresh(ctx),
       undefined,
       (err) => ctx.ui.notify(err, "warning"),
     );
-    titles.seed(collectUserMessages(ctx));
+    summaries.seed(collectUserMessages(ctx));
     void resolveCmuxContext().then((resolved) => {
       cmuxContext = resolved;
       scheduleRefresh(ctx);
@@ -119,7 +119,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           getFooterData: () => footerData,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getCmuxContext: () => cmuxContext,
-          getTitle: (messageId, text) => titles?.get(messageId, text) ?? fallbackTitle(text),
+          getTitle: (messageId, text) => summaries?.get(messageId, text) ?? fallbackSummary(text),
           messages: collectUserMessages(ctx),
         });
         return new SidebarLayoutBridge(currentTui, sidebar);
@@ -156,8 +156,8 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
-    titles?.dispose();
-    titles = null;
+    summaries?.dispose();
+    summaries = null;
     sidebar = null;
     tui = null;
     cachedContext = null;
@@ -177,7 +177,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
 
   pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("turn_end", (_event, ctx) => {
-    titles?.turnCompleted(collectUserMessages(ctx));
+    summaries?.turnCompleted(collectUserMessages(ctx));
     scheduleRefresh(ctx);
   });
   pi.on("agent_end", (_event, ctx) => scheduleRefresh(ctx));

@@ -3,7 +3,7 @@ import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { SIDEBAR_WIDTH } from "../src/constants.ts";
 import { SidebarComponent, minimumHeight, type UserMessage } from "../src/sidebar-component.ts";
-import { fallbackTitle } from "../src/titles.ts";
+import { fallbackSummary } from "../src/summaries.ts";
 
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
@@ -84,7 +84,7 @@ function makeSidebar(options: {
       getAvailableProviderCount: () => 2,
       onBranchChange: () => () => {},
     }),
-    getTitle: options.getTitle ?? ((_id, text) => fallbackTitle(text)),
+    getTitle: options.getTitle ?? ((_id, text) => fallbackSummary(text)),
   });
 }
 
@@ -169,14 +169,14 @@ test("session section shows surface ref, cwd identity, branch, and session id", 
 });
 
 test("message rows show one title per row with fallback", () => {
-  const titles = new Map([
+  const summaries = new Map([
     ["id-0", "Custom Title Zero"],
     ["id-1", "Custom Title One"],
   ]);
   const sidebar = makeSidebar({
     messages: sampleMessages(2),
     rows: 25,
-    getTitle: (id, text) => titles.get(id) ?? fallbackTitle(text),
+    getTitle: (id, text) => summaries.get(id) ?? fallbackSummary(text),
   });
 
   const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
