@@ -208,7 +208,9 @@ test("Enter and Esc navigate the detail lifecycle", () => {
   const detailLines = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
   assert.ok(detailLines.some((l) => l.includes("MESSAGE")));
   assert.ok(detailLines.some((l) => l.includes("#3")));
-  assert.ok(detailLines.some((l) => l.includes("Esc back · ↑↓ scroll")));
+  // This message fits, so the hint must not offer a scroll that does nothing.
+  assert.ok(detailLines.some((l) => l.includes("Esc back")));
+  assert.ok(!detailLines.some((l) => l.includes("↑↓ scroll")));
 
   // First Esc closes detail, keeping focus
   sidebar.handleInput("\x1b");
@@ -361,4 +363,26 @@ test("a narrow slot never overflows and never leaves a ragged column", () => {
     assert.equal(lines.length, 30);
     assert.ok(lines.every((l) => visibleWidth(l) === width), `width ${width} is ragged`);
   }
+});
+
+test("the detail hint offers scrolling only when the message overflows", () => {
+  const short = makeSidebar({ messages: sampleMessages(1), rows: 30 });
+  short.setFocused(true);
+  short.handleInput("\r");
+  const shortHint = short.render(SIDEBAR_WIDTH).map(stripAnsi).find((l) => l.includes("Esc back"));
+  assert.ok(shortHint);
+  assert.ok(!shortHint.includes("scroll"), "a message that fits must not advertise scrolling");
+
+  const long = makeSidebar({
+    messages: [{
+      id: "long", index: 1, timestamp: new Date(2026, 8, 10, 2, 16).toISOString(),
+      text: Array.from({ length: 60 }, (_, i) => `line${i} of a message body that wraps`).join(" "),
+    }],
+    rows: 30,
+  });
+  long.setFocused(true);
+  long.handleInput("\r");
+  const longHint = long.render(SIDEBAR_WIDTH).map(stripAnsi).find((l) => l.includes("Esc back"));
+  assert.ok(longHint);
+  assert.match(longHint, /↑↓ scroll/);
 });

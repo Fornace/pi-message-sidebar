@@ -266,8 +266,13 @@ export class SidebarComponent implements Component {
       : this.headingRow("MESSAGES", total > 0 ? `${position}/${total}` : "0/0");
 
     if (this.detailId) {
-      const detail = this.renderDetail(this.detailId, Math.max(1, rows - 2));
-      return [heading, ...detail, this.hintRow("Esc back · ↑↓ scroll")];
+      const detailRows = Math.max(1, rows - 2);
+      const detail = this.renderDetail(this.detailId, detailRows);
+      // Only offer scrolling when there is something below the fold.
+      const message = this.messages[this.indexForId(this.detailId)];
+      const scrollable = message !== undefined
+        && detailCapacity(detailRows, this.wrappedDetail(message).length).hasIndicator;
+      return [heading, ...detail, this.hintRow(scrollable ? "Esc back · ↑↓ scroll" : "Esc back")];
     }
 
     const blank = rows >= 4;
