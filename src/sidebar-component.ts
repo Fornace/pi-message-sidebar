@@ -9,9 +9,10 @@ import { matchesKey } from "@earendil-works/pi-tui";
 import type { CmuxContext } from "./cmux.ts";
 import { SIDEBAR_WIDTH } from "./constants.ts";
 import { readSessionGoal } from "./goal.ts";
+import type { FileEdit } from "./files.ts";
 import { assertLinesFit } from "./layout.ts";
 import { MessagePanel } from "./messages.ts";
-import { renderGoalSection, renderRuntimeSection, renderSessionSection, ruleRow } from "./sections.ts";
+import { renderFilesSection, renderGoalSection, renderRuntimeSection, renderSessionSection, ruleRow } from "./sections.ts";
 import { BG, FG_BRIGHT, FG_DIM, FG_FAINT, BOLD, RST, fillRow } from "./style.ts";
 
 import type { UserMessage } from "./types.ts";
@@ -27,10 +28,11 @@ type SidebarOptions = {
   getSummary: (messageId: string, text: string) => string;
   hasSummary: (messageId: string) => boolean;
   summariesConfigured: () => boolean;
+  getEditedFiles: () => FileEdit[];
   messages: UserMessage[];
 };
 
-type Layout = { goal: number; session: number; runtime: number; messages: number };
+type Layout = { goal: number; session: number; files: number; runtime: number; messages: number };
 
 const RULE_ROWS = 3;
 /** Rows a section cannot render without losing content it is required to show. */
@@ -56,11 +58,12 @@ export function minimumHeight(hasGoal: boolean): number {
  * budget does not fit, so the caller renders a notice instead of silently
  * slicing content away.
  */
-function allocate(height: number, hasGoal: boolean): Layout | null {
+function allocate(height: number, hasGoal: boolean, hasFiles: boolean): Layout | null {
   if (height < minimumHeight(hasGoal)) return null;
 
   let goal = MANDATORY.goal(hasGoal);
   let session = MANDATORY.session;
+  let files = 0;
   let runtime = MANDATORY.runtime;
   let spare = height - minimumHeight(hasGoal);
 
@@ -72,9 +75,15 @@ function allocate(height: number, hasGoal: boolean): Layout | null {
   };
   grow(1, (granted) => { session += granted; });        // branch · session id
   if (hasGoal) grow(4, (granted) => { goal += granted; }); // second title line and spacing
+  if (hasFiles) {
+    // The section also costs its separating rule; it needs a heading plus a
+    // file row to be worth either, so a cramped rail leaves it out entirely.
+    const wanted = Math.min(3, spare - 1);
+    if (wanted >= 2) { files = wanted; spare -= wanted + 1; }
+  }
   grow(1, (granted) => { runtime += granted; });        // trailing breath under the runtime rows
 
-  return { goal, session, runtime, messages: MANDATORY.messages + spare };
+  return { goal, session, files, runtime, messages: MANDATORY.messages + spare };
 }
 
 export class SidebarComponent implements Component {
@@ -143,7 +152,8 @@ export class SidebarComponent implements Component {
     if (signature === this.cachedSignature) return this.cachedLines;
 
     const hasGoal = readSessionGoal(this.options.ctx) !== null;
-    const layout = safeWidth < SIDEBAR_WIDTH ? null : allocate(targetHeight, hasGoal);
+    const files = this.options.getEditedFiles();
+    const layout = safeWidth < SIDEBAR_WIDTH ? null : allocate(targetHeight, hasGoal, files.length > 0);
     const result = layout
       ? this.renderRail(safeWidth, targetHeight, layout)
       : this.renderNotice(safeWidth, targetHeight, hasGoal);
@@ -169,6 +179,10 @@ export class SidebarComponent implements Component {
     lines.push(...renderGoalSection(readSessionGoal(ctx), layout.goal));
     lines.push(ruleRow());
     lines.push(...renderSessionSection(ctx, this.options.getFooterData(), this.options.getCmuxContext(), layout.session));
+    if (layout.files > 0) {
+      lines.push(ruleRow());
+      lines.push(...renderFilesSection(this.options.getEditedFiles(), layout.files));
+    }
     lines.push(ruleRow());
     lines.push(...this.panel.renderSection(layout.messages, this.focused));
     lines.push(ruleRow());
@@ -193,6 +207,7 @@ export class SidebarComponent implements Component {
     const statuses = this.options.getFooterData()?.getExtensionStatuses();
     const goal = readSessionGoal(this.options.ctx);
     const cmux = this.options.getCmuxContext();
+    const files = this.options.getEditedFiles();
     return JSON.stringify({
       width,
       height,
@@ -203,6 +218,7 @@ export class SidebarComponent implements Component {
       statuses: statuses && typeof (statuses as any).entries === "function" ? [...statuses.entries()] : [],
       goal: goal ? `${goal.goalId}:${goal.status}:${goal.usage.tokensUsed}:${goal.usage.activeSeconds}:${goal.updatedAt}` : null,
       cmux: cmux ? `${cmux.workspaceTitle}:${cmux.workspaceRef}:${cmux.surfaceRef}` : null,
+      files: `${files.length}:${files[0]?.path ?? ""}`,
     });
   }
 

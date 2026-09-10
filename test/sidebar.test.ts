@@ -72,6 +72,7 @@ function makeSidebar(options: {
   getSummary?: (id: string, text: string) => string;
   hasSummary?: (id: string) => boolean;
   summariesConfigured?: boolean;
+  editedFiles?: string[];
 }) {
   const rows = options.rows ?? 30;
   return new SidebarComponent({
@@ -89,6 +90,7 @@ function makeSidebar(options: {
     getSummary: options.getSummary ?? ((_id, text) => fallbackSummary(text)),
     hasSummary: options.hasSummary ?? (() => true),
     summariesConfigured: () => options.summariesConfigured ?? true,
+    getEditedFiles: () => (options.editedFiles ?? []).map((path, index) => ({ path, edits: index === 0 ? 3 : 1 })),
   });
 }
 
@@ -196,6 +198,33 @@ test("message rows show one title per row with fallback", () => {
   const heading = clean.find((l) => l.includes("MESSAGES"));
   assert.ok(heading);
   assert.match(heading, /MESSAGES\s+2\/2/);
+});
+
+test("the files section summarizes edited files between session and messages", () => {
+  const sidebar = makeSidebar({
+    messages: sampleMessages(3),
+    rows: 34,
+    editedFiles: ["/very/deep/path/repo/src/sidebar-component.ts", "/repo/README.md", "/repo/CHANGELOG.md"],
+  });
+
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const filesIdx = clean.findIndex((l) => /FILES\s+3 files/.test(l));
+  assert.ok(filesIdx >= 0, "FILES heading with the distinct-file count must appear");
+
+  // Latest first, deep paths front-truncated, repeat count on the most-edited file
+  assert.match(clean[filesIdx + 1]!, /…\/path\/repo\/src\/sidebar-component\.ts ×3\s*$/);
+  assert.match(clean[filesIdx + 2]!, /\/repo\/README\.md/);
+
+  // Section order: SESSION before FILES before MESSAGES
+  const sessionIdx = clean.findIndex((l) => l.includes("SESSION"));
+  const messagesIdx = clean.findIndex((l) => l.includes("MESSAGES"));
+  assert.ok(sessionIdx < filesIdx && filesIdx < messagesIdx);
+});
+
+test("no files section renders when the session has not edited anything", () => {
+  const sidebar = makeSidebar({ messages: sampleMessages(2), rows: 30, editedFiles: [] });
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  assert.ok(!clean.some((l) => l.includes("FILES")), "an empty edit history must not render a FILES section");
 });
 
 test("Enter and Esc navigate the detail lifecycle", () => {

@@ -4,6 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { CmuxContext } from "./cmux.ts";
+import type { FileEdit } from "./files.ts";
 import type { ThreadGoal } from "./goal.ts";
 import { computeUsage } from "./status-dock.ts";
 import {
@@ -28,7 +29,6 @@ import {
   formatElapsed,
   formatTokens,
 } from "./style.ts";
-
 /**
  * Content width inside the rail: 42 columns minus the boundary and the two
  * pads. Every budget below measures against this, so a right-aligned element
@@ -166,6 +166,29 @@ export function renderSessionSection(
     } else {
       push(railRow(sessionPart, BG, width));
     }
+  }
+  while (lines.length < rows) push(railRow("", BG, width));
+  return lines;
+}
+
+// --- files ----------------------------------------------------------------
+
+/**
+ * The session's write footprint: heading with the distinct-file count, then
+ * the most recently touched files, latest first, with a repeat count when a
+ * file was written more than once. Zero rows when nothing was edited.
+ */
+export function renderFilesSection(files: FileEdit[], rows: number, width = RAIL_CONTENT): string[] {
+  if (rows <= 0 || files.length === 0) return [];
+  const lines: string[] = [];
+  const push = (line: string) => { if (lines.length < rows) lines.push(line); };
+
+  const noun = files.length === 1 ? "file" : "files";
+  push(labelRow("FILES", BG, `${FG_FAINT}${files.length} ${noun}${RST}`));
+  for (const file of files) {
+    if (lines.length >= rows) break;
+    const repeats = file.edits > 1 ? ` ${FG_FAINT}×${file.edits}${RST}` : "";
+    push(railRow(`${FG_PRIMARY}${ellipsizePath(file.path, Math.max(1, width - visibleWidth(repeats)))}${RST}${repeats}`, BG, width));
   }
   while (lines.length < rows) push(railRow("", BG, width));
   return lines;

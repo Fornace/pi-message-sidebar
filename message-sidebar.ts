@@ -8,6 +8,7 @@ import { isViewportTUI, matchesKey, truncateToWidth } from "@earendil-works/pi-t
 import type { CmuxContext } from "./src/cmux.ts";
 import { resolveCmuxContext } from "./src/cmux.ts";
 import { isSidebarVisible } from "./src/constants.ts";
+import { readSessionFileEdits } from "./src/files.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
 import { SidebarComponent } from "./src/sidebar-component.ts";
 import { isGatewayConfigured, SummaryService, fallbackSummary } from "./src/summaries.ts";
@@ -122,6 +123,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           getSummary: (messageId, text) => summaries?.get(messageId, text) ?? fallbackSummary(text),
           hasSummary: (messageId) => summaries?.hasSummary(messageId) ?? false,
           summariesConfigured: isGatewayConfigured,
+          getEditedFiles: () => readSessionFileEdits(ctx),
           messages: collectUserMessages(ctx),
         });
         return new SidebarLayoutBridge(currentTui, sidebar);
