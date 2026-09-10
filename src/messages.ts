@@ -1,8 +1,8 @@
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import { DOT_GLYPH, isSettling, pulse, settlePhase } from "./anim.ts";
+import { ARRIVE_MS, DOT_GLYPH, GLOW_MS, arriveProgress, glowStrength, isArriving, isSettling, pulse, settlePhase } from "./anim.ts";
 import type { Palette } from "./palette.ts";
-import { fgRgb, rgbLerp } from "./palette.ts";
-import { RAIL_CONTENT, headerRow, railRow } from "./sections.ts";
+import { bgRgb, fgRgb, rgbLerp } from "./palette.ts";
+import { RAIL_CONTENT, ghostHeader, railRow } from "./sections.ts";
 import { RST, clip, formatCount, formatTime, wrapText } from "./style.ts";
 import type { UserMessage } from "./types.ts";
 
@@ -20,8 +20,9 @@ type MessagePanelOptions = {
   requestRefresh: () => void;
 };
 
-/** Cells in front of the summary text: marker, ordinal, space, time, space. */
-const META_CELLS = 11;
+/** Cells in front of the summary text: marker, time, space. The ordinal is
+ *  gone: its four cells buy summary text instead. */
+const META_CELLS = 7;
 const TEXT_CELLS = RAIL_CONTENT - META_CELLS;
 /** One message always occupies a two-row slot: summary line plus its wrap. */
 const ROWS_PER_MESSAGE = 2;
@@ -62,6 +63,10 @@ export class MessagePanel {
   private wrapCache: { id: string; lines: string[] } | null = null;
   private readonly seenSummary = new Map<string, boolean>();
   private readonly landedAt = new Map<string, number>();
+  private readonly arrivedAt = new Map<string, number>();
+  /** Ids seen so far; the first updateMessages seeds history without animating
+   *  it, so a resumed session loads calm and only live arrivals reveal. */
+  private readonly known = new Set<string>();
 
   constructor(
     private readonly options: MessagePanelOptions,
@@ -69,6 +74,7 @@ export class MessagePanel {
   ) {
     this.messages = messages;
     this.selectedId = messages.at(-1)?.id ?? null;
+    for (const message of messages) this.known.add(message.id);
   }
 
   getSelectedMessageId(): string | null { return this.selectedId; }
@@ -85,6 +91,12 @@ export class MessagePanel {
     const previousId = this.selectedId;
     const previousStartId = this.viewportStartId;
     this.messages = messages;
+    for (const message of messages) {
+      if (!this.known.has(message.id)) {
+        this.known.add(message.id);
+        this.arrivedAt.set(message.id, Date.now());
+      }
+    }
     const ids = new Set(messages.map((message) => message.id));
     if (this.detailId && !ids.has(this.detailId)) { this.detailId = null; this.detailScroll = 0; }
     this.viewportStartId = previousStartId && ids.has(previousStartId) ? previousStartId : null;
@@ -134,8 +146,12 @@ export class MessagePanel {
       if (this.options.isPending(message.id)) return true;
     }
     for (const [id, at] of this.landedAt) {
-      if (isSettling(now, at)) return true;
+      if (isSettling(now, at) || now - at < GLOW_MS) return true;
       if (now - at > 5000) this.landedAt.delete(id);
+    }
+    for (const [id, at] of this.arrivedAt) {
+      if (isArriving(now, at)) return true;
+      if (now - at > 5000) this.arrivedAt.delete(id);
     }
     return false;
   }
@@ -162,44 +178,46 @@ export class MessagePanel {
     }
 
     // The setup hint replaces the spacer row under the heading; a message
-    // slot is never sacrificed for it.
+    // slot is never sacrificed for it. An air row opens the section so every
+    // ghost header sits one row below the content above it.
     const showSetupHint = !this.options.summariesConfigured() && rows >= 5;
     const spacer = rows >= (showSetupHint ? 6 : 5);
-    const consumed = 1 + (showSetupHint ? 1 : 0) + (spacer ? 1 : 0) + 1;
+    const consumed = 2 + (showSetupHint ? 1 : 0) + (spacer ? 1 : 0) + 1;
     const viewportRows = Math.max(2, rows - consumed);
     const sections = [
+      railRow(palette, "", palette.bgDeep),
       heading,
-      ...(showSetupHint ? [railRow(palette, `${palette.meta}${SETUP_HINT}${RST}`, palette.bgBase)] : []),
-      ...(spacer ? [railRow(palette, "", palette.bgBase)] : []),
+      ...(showSetupHint ? [railRow(palette, `${palette.ghostBright}${SETUP_HINT}${RST}`, palette.bgDeep)] : []),
+      ...(spacer ? [railRow(palette, "", palette.bgDeep)] : []),
       ...this.renderViewport(viewportRows, focused, palette, now),
       this.hintRow(palette, focused ? "[↑↓] select  [↵] open  [c] copy" : "[Ctrl+Shift+H] focus"),
     ];
-    while (sections.length < rows) sections.push(railRow(palette, "", palette.bgBase));
+    while (sections.length < rows) sections.push(railRow(palette, "", palette.bgDeep));
     return sections.slice(0, rows);
   }
 
   // --- list rendering ------------------------------------------------------
 
   private headingRow(palette: Palette, label: string, right: string): string {
-    return headerRow(palette, label, palette.bgBase, `${palette.meta}${right}${RST}`);
+    return ghostHeader(palette, label, palette.bgDeep, right);
   }
 
   private hintRow(palette: Palette, text: string): string {
-    return railRow(palette, `${palette.meta}${text}${RST}`, palette.bgSunken);
+    return railRow(palette, `${palette.ghost}${text}${RST}`, palette.bgPanel);
   }
 
   /** Always returns exactly `rows` lines: ellipsis rows, message pairs, padding. */
   private renderViewport(rows: number, focused: boolean, palette: Palette, now: number): string[] {
     if (this.messages.length === 0) {
-      const empty = [railRow(palette, `${palette.preview}No messages yet${RST}`, palette.bgBase)];
-      while (empty.length < rows) empty.push(railRow(palette, "", palette.bgBase));
+      const empty = [railRow(palette, `${palette.ghost}No messages yet${RST}`, palette.bgDeep)];
+      while (empty.length < rows) empty.push(railRow(palette, "", palette.bgDeep));
       return empty;
     }
 
     const window = this.resolveWindow(rows);
     const pairs: string[] = [];
     for (let index = window.start; index < window.end; index++) {
-      pairs.push(...this.messageRows(index, focused, palette, now));
+      pairs.push(...this.messageRows(index, palette, now));
     }
     // A message pair outranks an ellipsis row when both cannot fit.
     const topCount = window.start > 0 && 1 + pairs.length <= rows;
@@ -213,46 +231,60 @@ export class MessagePanel {
     // stream reads bottom-anchored, and the spare air sits under the
     // heading instead of opening a hole above the hint.
     if (!topCount && !bottomCount) {
-      while (lines.length < rows) lines.unshift(railRow(palette, "", palette.bgBase));
+      while (lines.length < rows) lines.unshift(railRow(palette, "", palette.bgDeep));
     } else {
-      while (lines.length < rows) lines.push(railRow(palette, "", palette.bgBase));
+      while (lines.length < rows) lines.push(railRow(palette, "", palette.bgDeep));
     }
     return lines.slice(0, rows);
   }
 
   private countRow(palette: Palette, count: number, direction: "earlier" | "later"): string {
-    return railRow(palette, `${palette.meta}… ${count} ${direction}${RST}`, palette.bgBase);
+    return railRow(palette, `${palette.ghost}… ${count} ${direction}${RST}`, palette.bgDeep);
   }
 
-  private messageRows(index: number, focused: boolean, palette: Palette, now: number): string[] {
+  private messageRows(index: number, palette: Palette, now: number): string[] {
     const message = this.messages[index]!;
     const selected = message.id === this.selectedId;
-    const marker = this.markerCell(message, selected, focused, palette, now);
-    const ordinal = clip(String(message.index), 3).padStart(3);
+    const pending = this.options.isPending(message.id);
+    // The selection bar spans both rows of the slot: a two-cell yellow edge.
+    const bar = selected ? `${palette.badgeModified}▎${RST}` : " ";
+    const marker = pending ? this.pendingDot(palette, now) : bar;
+    const secondMarker = pending ? " " : bar;
     const time = formatTime(message.timestamp).padEnd(5);
-    const meta = `${palette.meta}${ordinal} ${time} ${RST}`;
-    const text = this.summaryLines(message);
+    const meta = `${palette.ghost}${time}${RST} `;
+    const arrived = this.arrivedAt.get(message.id);
+    const progress = arrived === undefined ? 1 : arriveProgress(now, arrived);
+    const text = this.summaryLines(message, progress);
     const color = this.textColor(message, index, selected, palette, now);
-    const background = selected ? palette.bgSelected : palette.bgBase;
+    const background = this.slotBackground(message, selected, palette, now);
     const first = `${marker}${meta}${color}${text[0]}${RST}`;
-    const second = `${" ".repeat(META_CELLS)}${color}${text[1]}${RST}`;
+    const second = `${secondMarker}${" ".repeat(META_CELLS - 1)}${color}${text[1]}${RST}`;
     return [
       railRow(palette, first, background),
       railRow(palette, second, background),
     ];
   }
 
-  /** Selection marker, or a pulsing dot while the summary is still in flight. */
-  private markerCell(message: UserMessage, selected: boolean, focused: boolean, palette: Palette, now: number): string {
-    if (this.options.isPending(message.id)) {
-      if (palette.truecolor && palette.dotDim && palette.dotPeak) {
-        return `${fgRgb(rgbLerp(palette.dotDim, palette.dotPeak, pulse(now, 0)))}${DOT_GLYPH}${RST}`;
-      }
-      const step = Math.round(pulse(now, 0) * (palette.dotFallback.length - 1));
-      return `${palette.dotFallback[step] ?? palette.meta}${DOT_GLYPH}${RST}`;
+  /**
+   * The slot surface: a focused selection is the soft accent tint, an
+   * unfocused one half of it, and a message whose summary just landed keeps a
+   * decaying glow over the deep canvas. Everything else floats on deep.
+   */
+  private slotBackground(message: UserMessage, selected: boolean, palette: Palette, now: number): string {
+    if (selected) return palette.bgSelect;
+    const landed = this.landedAt.get(message.id);
+    if (landed === undefined || !palette.truecolor || !palette.glowFrom || !palette.glowTo) return palette.bgDeep;
+    const strength = glowStrength(now, landed);
+    return strength > 0 ? bgRgb(rgbLerp(palette.glowTo, palette.glowFrom, strength)) : palette.bgDeep;
+  }
+
+  /** The working dot: a fast pulse while the summary is still in flight. */
+  private pendingDot(palette: Palette, now: number): string {
+    if (palette.truecolor && palette.dotDim && palette.dotPeak) {
+      return `${fgRgb(rgbLerp(palette.dotDim, palette.dotPeak, pulse(now, 0)))}${DOT_GLYPH}${RST}`;
     }
-    if (selected && focused) return `${palette.accent}›${RST}`;
-    return " ";
+    const step = Math.round(pulse(now, 0) * (palette.dotFallback.length - 1));
+    return `${palette.dotFallback[step] ?? palette.ghost}${DOT_GLYPH}${RST}`;
   }
 
   /** Age fade like pi-recap: newest bright, recent normal, older muted; a
@@ -277,9 +309,15 @@ export class MessagePanel {
     return palette.textOld;
   }
 
-  /** The summary wrapped into the two text cells of a message slot. */
-  private summaryLines(message: UserMessage): [string, string] {
+  /** The summary wrapped into the two text cells of a message slot. While a
+   *  slot is arriving, the first line reveals left to right and the second
+   *  waits its turn. */
+  private summaryLines(message: UserMessage, progress = 1): [string, string] {
     const wrapped = wrapText(this.options.getSummary(message.id, message.text), TEXT_CELLS);
+    if (progress < 1) {
+      const reveal = Math.max(1, Math.floor(progress * TEXT_CELLS));
+      return [clip(wrapped[0] ?? "", reveal), ""];
+    }
     if (wrapped.length <= 1) return [wrapped[0] ?? "", ""];
     const second = wrapped.length > 2
       ? clip(wrapped.slice(1).join(" "), TEXT_CELLS)
@@ -341,27 +379,27 @@ export class MessagePanel {
     if (!message) {
       // The message left the branch under an open detail. Fill the section:
       // returning a single row would surface as a fatal height mismatch.
-      const lines = [railRow(palette, `${palette.preview}Message unavailable${RST}`, palette.bgBase)];
-      while (lines.length < rows) lines.push(railRow(palette, "", palette.bgBase));
+      const lines = [railRow(palette, `${palette.ghost}Message unavailable${RST}`, palette.bgDeep)];
+      while (lines.length < rows) lines.push(railRow(palette, "", palette.bgDeep));
       return lines;
     }
     this.lastDetailRows = rows;
     const wrapped = this.wrappedDetail(message);
-    const size = `${palette.meta}${formatCount(message.text.length)} chars · ${wrapped.length} lines${RST}`;
+    const size = `${palette.ghostBright}${formatCount(message.text.length)} chars · ${wrapped.length} lines${RST}`;
     const head = `#${message.index} ${formatTime(message.timestamp)}`;
     const gap = Math.max(1, RAIL_CONTENT - visibleWidth(head) - visibleWidth(`${formatCount(message.text.length)} chars · ${wrapped.length} lines`));
-    const header = railRow(palette, `${palette.meta}${head}${RST}${" ".repeat(gap)}${size}`, palette.bgRaised);
+    const header = railRow(palette, `${palette.ghostBright}${head}${RST}${" ".repeat(gap)}${size}`, palette.bgPanel);
     const { textCapacity, hasIndicator, maxScroll } = detailCapacity(rows, wrapped.length);
     this.detailScroll = Math.max(0, Math.min(this.detailScroll, maxScroll));
     const visible = wrapped.slice(this.detailScroll, this.detailScroll + textCapacity);
-    const lines = [header, ...visible.map((line) => railRow(palette, `${palette.textMid}${line}${RST}`, palette.bgRaised))];
+    const lines = [header, ...visible.map((line) => railRow(palette, `${palette.textMid}${line}${RST}`, palette.bgPanel))];
     if (hasIndicator) {
       const position = visible.length > 0
         ? `${this.detailScroll + 1}-${this.detailScroll + visible.length} of ${wrapped.length}`
         : `line ${Math.min(this.detailScroll + 1, wrapped.length)} of ${wrapped.length}`;
-      lines.push(railRow(palette, `${palette.meta}${position} · ↑↓ scroll${RST}`, palette.bgRaised));
+      lines.push(railRow(palette, `${palette.ghost}${position} · ↑↓ scroll${RST}`, palette.bgPanel));
     }
-    while (lines.length < rows) lines.push(railRow(palette, "", palette.bgRaised));
+    while (lines.length < rows) lines.push(railRow(palette, "", palette.bgPanel));
     return lines.slice(0, rows);
   }
 

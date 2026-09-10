@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.0
+
+> The obsidian rail: a deep canvas, one raised goal card, ghost chrome, and a motion language that only moves when the session does.
+
+- **Palette and depth.** The rail is a truecolor ladder: a deep well (`#0c0d14`) as canvas, a raised panel step for the goal card, an accent-tinted selection, and two ghost tiers for chrome. 256-color and light-terminal variants throughout. The old flat 234/235/233 slab and the theme's raw selection color are gone.
+- **Ghost headers.** Section rules are gone. SESSION, FILES, MESSAGES and RUNTIME are quiet left-aligned labels with right-aligned metadata, each preceded by an air row; sections separate by whitespace and background steps.
+- **Goal card.** The hero block: breathing status dot (2.4s), budget share on the right, bold objective across up to three lines, and a `bdg`-labeled twelve-cell meter in eighths-of-a-cell resolution. A missing goal is one ghost row on the deep canvas.
+- **Message slots.** Ordinals are gone; their four cells buy summary text (32 cells per line). Selection is a two-row yellow bar plus a soft accent tint; pending summaries pulse; landed summaries sweep accent then glow-decay over the canvas; age fade keeps newest bright and old muted.
+- **Motion language.** Eased meters (context and budget glide toward their targets), a shimmer cell riding a meter while it eases, left-to-right reveal as a message arrives, a victory flash when a goal completes, and a sheen band crossing the flag while the rail is live. The tick runs only while something moves, plus the ambient goal breath; idle costs nothing.
+- **The Fornace flag.** The rail's crown row is the seven brand hues sampled from the production logo, painted solid edge to edge.
+- Pressure thresholds moved to 70/90 percent so ordinary sessions read accent, not alarm.
+
 ## 1.11.0
 
 > Plain-text summaries and an honest copy key: what you copy from the rail is finally clean.

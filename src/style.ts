@@ -48,6 +48,39 @@ export function stripControl(text: string): string {
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, " ");
 }
 
+/**
+ * A smooth meter in eighths of a cell: whole cells, one partial glyph, then a
+ * dim track of the same shape. `fill` and `track` are complete SGR prefixes.
+ */
+const EIGHTHS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+
+export function meterCells(
+  ratio: number | null,
+  cells: number,
+  fill: string,
+  track: string,
+  trackGlyph = "█",
+  shimmer: number | null = null,
+): string {
+  if (ratio === null || !Number.isFinite(ratio) || cells <= 0) return "";
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const exact = clamped * cells;
+  let whole = Math.floor(exact);
+  let partial = Math.round((exact - whole) * 8);
+  if (partial === 8) {
+    whole += 1;
+    partial = 0;
+  }
+  const partialGlyph = partial > 0 ? EIGHTHS[partial - 1] : "";
+  const trackCells = Math.max(0, cells - whole - (partialGlyph ? 1 : 0));
+  // While a meter eases, one filled cell wears bold: a shimmer riding the fill.
+  const block = (index: number) => (shimmer !== null && index === shimmer ? `${fill}\x1b[1m█${RST}${fill}` : "█");
+  let filledPart = "";
+  for (let index = 0; index < whole; index++) filledPart += block(index);
+  filledPart += partialGlyph;
+  return `${fill}${filledPart}${RST}${track}${trackGlyph.repeat(trackCells)}${RST}`;
+}
+
 /** Compact counts: 940, 1.4k, 12k, 1.2M. */
 export function formatCount(count: number): string {
   if (!Number.isFinite(count) || count < 0) return "?";

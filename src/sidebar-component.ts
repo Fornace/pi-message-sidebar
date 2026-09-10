@@ -7,15 +7,18 @@ import {
 import { basename } from "node:path";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey } from "@earendil-works/pi-tui";
-import { ANIM_TICK_MS } from "./anim.ts";
+import { ANIM_TICK_MS, EasedMeter, isVictory } from "./anim.ts";
 import type { CmuxContext } from "./cmux.ts";
 import { SIDEBAR_WIDTH } from "./constants.ts";
 import type { FileEdit } from "./files.ts";
+import { flagRow } from "./flag.ts";
 import { readSessionGoal } from "./goal.ts";
 import { assertLinesFit } from "./layout.ts";
 import { MessagePanel } from "./messages.ts";
 import { resolvePalette } from "./palette.ts";
-import { renderGoalSection, renderRuntimeSection, renderSessionSection } from "./sections.ts";
+import { renderGoalSection } from "./goal-card.ts";
+import { renderRuntimeSection, renderSessionSection } from "./sections.ts";
+import { computeUsage } from "./status-dock.ts";
 import { RST, fillRow } from "./style.ts";
 
 import type { UserMessage } from "./types.ts";
@@ -43,19 +46,21 @@ type Layout = { goal: number; session: number; runtime: number; messages: number
 /** Rows a section cannot render without losing content it is required to show.
  *  Section headers embed their own rules, so no separator rows are budgeted. */
 const MANDATORY = {
-  /** header + title + title + budget meter; the no-goal state is a single rule row. */
+  /** the flag crown row. */
+  crown: 1,
+  /** status chip + two title rows + budget meter; the no-goal state is one ghost row. */
   goal: (hasGoal: boolean) => (hasGoal ? 4 : 1),
-  /** header + surface/workspace + cwd. */
-  session: 3,
-  /** header + one two-row message + hint. */
-  messages: 4,
-  /** header + model route + ctx meter. */
-  runtime: 3,
+  /** separator + ghost header + surface/workspace + cwd. */
+  session: 4,
+  /** air + ghost header + one two-row message + hint strip. */
+  messages: 5,
+  /** separator + ghost header + model route + ctx meter. */
+  runtime: 4,
 } as const;
 
 /** Smallest terminal that can hold every mandatory row; below it the rail shows a notice. */
 export function minimumHeight(hasGoal: boolean): number {
-  return MANDATORY.goal(hasGoal) + MANDATORY.session + MANDATORY.messages + MANDATORY.runtime;
+  return MANDATORY.crown + MANDATORY.goal(hasGoal) + MANDATORY.session + MANDATORY.messages + MANDATORY.runtime;
 }
 
 /**
@@ -64,7 +69,7 @@ export function minimumHeight(hasGoal: boolean): number {
  * budget does not fit, so the caller renders a notice instead of silently
  * slicing content away.
  */
-function allocate(height: number, hasGoal: boolean, hasFiles: boolean): Layout | null {
+function allocate(height: number, hasGoal: boolean, fileCount: number): Layout | null {
   if (height < minimumHeight(hasGoal)) return null;
 
   let goal = MANDATORY.goal(hasGoal);
@@ -78,14 +83,15 @@ function allocate(height: number, hasGoal: boolean, hasFiles: boolean): Layout |
     take(granted);
     spare -= granted;
   };
+  if (hasGoal) grow(5, (granted) => { goal += granted; }); // card air: pad, third title line, meter pad
   grow(1, (granted) => { session += granted; });          // session id row
-  if (hasFiles) {
-    // FILES lives inside the session block: header plus file rows. It needs
-    // both to be worth anything, so a cramped rail leaves it out entirely.
-    const granted = Math.min(3, spare);
-    if (granted >= 2) { session += granted; spare -= granted; }
+  if (fileCount > 0) {
+    // FILES lives inside the session block: air, header, plus file rows. It
+    // needs the air, the header and one row to be worth anything, so a
+    // cramped rail leaves it out entirely.
+    const granted = Math.min(2 + fileCount, spare);
+    if (granted >= 3) { session += granted; spare -= granted; }
   }
-  if (hasGoal) grow(3, (granted) => { goal += granted; }); // breathing around title and meter
   grow(1, (granted) => { runtime += granted; });          // trailing breath under the meter
 
   return { goal, session, runtime, messages: MANDATORY.messages + spare };
@@ -99,6 +105,12 @@ export class SidebarComponent implements Component {
   private cachedSignature = "";
   private cachedLines: string[] = [];
   private animTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly goalMeter = new EasedMeter();
+  private readonly ctxMeter = new EasedMeter();
+  private goalTarget: number | null = null;
+  private ctxTarget: number | null = null;
+  private previousGoalStatus: string | null = null;
+  private victoryAt: number | null = null;
 
   constructor(private readonly options: SidebarOptions) {
     this.panel = new MessagePanel(
@@ -151,8 +163,18 @@ export class SidebarComponent implements Component {
   }
 
   /** The tick exists only while a dot pulses or a summary settles. */
+  /** The rail is alive while a dot pulses, a glow decays, a meter eases, or
+   *  an active goal breathes: the ambient breath is the session's heartbeat,
+   *  and it stops the moment the goal completes or clears. */
+  private needsAnim(now: number): boolean {
+    if (this.panel.needsAnim(now)) return true;
+    if (this.goalMeter.moving(this.goalTarget) || this.ctxMeter.moving(this.ctxTarget)) return true;
+    if (this.victoryAt !== null && isVictory(now, this.victoryAt)) return true;
+    return readSessionGoal(this.options.ctx)?.status === "active";
+  }
+
   private ensureAnim(): void {
-    const live = this.panel.needsAnim(Date.now());
+    const live = this.needsAnim(Date.now());
     if (live && !this.animTimer) {
       this.animTimer = setInterval(() => {
         if (!this.panel.needsAnim(Date.now())) {
@@ -187,7 +209,7 @@ export class SidebarComponent implements Component {
 
     const hasGoal = readSessionGoal(this.options.ctx) !== null;
     const files = this.options.getEditedFiles();
-    const layout = safeWidth < SIDEBAR_WIDTH ? null : allocate(targetHeight, hasGoal, files.length > 0);
+    const layout = safeWidth < SIDEBAR_WIDTH ? null : allocate(targetHeight, hasGoal, files.length);
     const result = layout
       ? this.renderRail(safeWidth, targetHeight, layout, files)
       : this.renderNotice(safeWidth, targetHeight, hasGoal);
@@ -213,13 +235,29 @@ export class SidebarComponent implements Component {
     const palette = resolvePalette(this.options.getTheme());
     const now = Date.now();
     const lines: string[] = [];
-    lines.push(...renderGoalSection(readSessionGoal(ctx), layout.goal, palette));
+    const goal = readSessionGoal(ctx);
+    if (goal?.status === "complete" && this.previousGoalStatus !== "complete") this.victoryAt = now;
+    this.previousGoalStatus = goal?.status ?? null;
+    const live = this.needsAnim(now);
+    lines.push(flagRow(palette, SIDEBAR_WIDTH - 1, now, live));
+    this.goalTarget = goal?.tokenBudget ? Math.min(1, goal.usage.tokensUsed / goal.tokenBudget) : null;
+    this.goalMeter.tick(this.goalTarget);
+    const usage = computeUsage(ctx);
+    this.ctxTarget = usage.contextPercent === null ? null : Math.min(1, usage.contextPercent / 100);
+    this.ctxMeter.tick(this.ctxTarget);
+    const goalShimmer = this.goalMeter.moving(this.goalTarget) ? Math.floor(now / 120) % 12 : null;
+    const ctxShimmer = this.ctxMeter.moving(this.ctxTarget) ? Math.floor(now / 120) % 10 : null;
+
+    lines.push(...renderGoalSection(goal, layout.goal, palette, now, this.goalMeter, undefined, goalShimmer, this.victoryAt));
     lines.push(...renderSessionSection(
       ctx, this.options.getFooterData(), this.options.getCmuxContext(),
       layout.session, palette, files, this.options.getGitStatus,
     ));
     lines.push(...this.panel.renderSection(layout.messages, this.focused, palette, now));
-    lines.push(...renderRuntimeSection(ctx, this.options.getFooterData(), this.options.getThinkingLevel(), layout.runtime, palette));
+    lines.push(...renderRuntimeSection(
+      ctx, this.options.getFooterData(), this.options.getThinkingLevel(),
+      layout.runtime, palette, undefined, this.ctxMeter.get(), ctxShimmer,
+    ));
     return lines;
   }
 
@@ -228,12 +266,12 @@ export class SidebarComponent implements Component {
     const palette = resolvePalette(this.options.getTheme());
     const row = (text: string) =>
       width <= 1
-        ? fillRow("", width, palette.bgBase)
-        : `${palette.rule}│${RST}${fillRow(` ${text}`, width - 1, palette.bgBase)}`;
+        ? fillRow("", width, palette.bgDeep)
+        : `${palette.edge}│${RST}${fillRow(` ${text}`, width - 1, palette.bgDeep)}`;
     const lines: string[] = [];
     const push = (text: string) => { if (lines.length < height) lines.push(row(text)); };
     push(`${palette.bold(`${palette.textNew}Sidebar${RST}`)}`);
-    push(`${palette.meta}needs ${SIDEBAR_WIDTH}×${minimumHeight(hasGoal)}${RST}`);
+    push(`${palette.ghost}needs ${SIDEBAR_WIDTH}×${minimumHeight(hasGoal)}${RST}`);
     while (lines.length < height) lines.push(row(""));
     return lines;
   }
@@ -257,6 +295,8 @@ export class SidebarComponent implements Component {
       cmux: cmux ? `${cmux.workspaceTitle}:${cmux.workspaceRef}:${cmux.surfaceRef}` : null,
       files: `${files.length}:${files[0]?.path ?? ""}`,
       theme: theme?.name ?? null,
+      goalMeter: this.goalMeter.get()?.toFixed(3) ?? null,
+      ctxMeter: this.ctxMeter.get()?.toFixed(3) ?? null,
     });
   }
 
