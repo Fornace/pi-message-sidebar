@@ -4,7 +4,9 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 
 ## Features
 
-- Fixed 42-column panel on the right, stacked GOAL / SESSION / FILES / MESSAGES / runtime
+- Fixed 42-column panel on the right, stacked GOAL / SESSION / FILES / MESSAGES / RUNTIME
+- Embedded section headers: the label rides the rule with metadata right-aligned (branch, status, position, thinking level), one row where the old design spent two
+- Usage meters in the rule language: goal budget with counts and elapsed, context pressure with warning and danger thresholds
 - AI message summaries (`fornace-flash` through the Fornace gateway, `PI_SIDEBAR_SUMMARY_MODEL` to override): one plain sentence per prompt, cached per session on disk, with a deterministic preview as the placeholder until the model answers; an unconfigured gateway shows a setup hint under the MESSAGES heading
 - Theme-harmonized colors: semantic pi theme tokens for accents, badges, and selection, universal grays for content text, and a three-step background ladder; light terminals invert the ladder
 - Age-faded summaries with pi-recap motion: a pulsing dot while a summary is in flight, an accent settle sweep when it lands
@@ -69,7 +71,7 @@ The message body is one contiguous chronological viewport. New messages remain s
 - `src/layout.ts` reserves a persistent horizontal region in fullscreen mode and composes the current screenful in regular mode.
 - `src/sidebar-component.ts` owns section budgets, the render cache, and focus handling.
 - `src/messages.ts` renders the message grid and detail view, and owns ID-stable navigation and follow-tail behavior.
-- `src/sections.ts` renders the goal, session, files, and runtime sections into fixed row budgets.
+- `src/sections.ts` renders the embedded section headers, the goal, session, files, and runtime sections into fixed row budgets.
 - `src/summaries.ts` generates and caches one-line AI summaries off the render path.
 - `src/files.ts` collects the session's edited files from write tool calls.
 - `src/git-status.ts` maps the worktree status onto the shared M/A/U/D/R letter convention.

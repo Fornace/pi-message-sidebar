@@ -75,11 +75,18 @@ function makeSidebar(options: {
   editedFiles?: string[];
   pending?: string[];
   gitStatus?: Record<string, string>;
+  usage?: { percent: number | null; cost?: number };
 }) {
   const rows = options.rows ?? 30;
+  const base = fakeContext(options.messages, options.goal) as Record<string, unknown>;
+  if (options.usage) {
+    base.getContextUsage = () => options.usage!.percent === null
+      ? { tokens: 0, contextWindow: 200_000, percent: null }
+      : { tokens: Math.round(200_000 * options.usage!.percent / 100), contextWindow: 200_000, percent: options.usage!.percent };
+  }
   return new SidebarComponent({
     tui: fakeTui(rows),
-    ctx: fakeContext(options.messages, options.goal),
+    ctx: base as never,
     messages: options.messages,
     getThinkingLevel: () => "high",
     getCmuxContext: () => options.cmux ?? null,
@@ -143,12 +150,14 @@ test("goal section is above messages with bold title, status, and budget", () =>
   assert.ok(titleLine, "Goal title must appear");
   assert.match(titleLine, /\x1b\[1m/, "Goal title must be bold");
 
-  // Status and budget row
-  const statusLine = clean.find((l) => l.includes("ACTIVE") && l.includes("elapsed"));
-  assert.ok(statusLine, "Active status and elapsed time must appear");
-  const budgetLine = clean.find((l) => l.includes("tokens used"));
-  assert.ok(budgetLine, "Budget row must appear");
-  assert.match(budgetLine, /1.2M \/ 3.0M tokens used/);
+  // Status rides the header rule; the meter row carries counts and elapsed
+  const goalHeader = clean.find((l) => l.includes("GOAL"));
+  assert.ok(goalHeader, "Goal header must appear");
+  assert.match(goalHeader, /GOAL ─+ ● ACTIVE/);
+  const budgetLine = clean.find((l) => l.includes("tokens"));
+  assert.ok(budgetLine, "Budget meter row must appear");
+  assert.match(budgetLine, /1.2M \/ 3.0M tokens · 25:00/);
+  assert.ok(budgetLine.includes("━"), "Budget meter must draw its stroke");
 });
 
 test("session section shows surface ref, cwd identity, branch, and session id", () => {
@@ -170,13 +179,11 @@ test("session section shows surface ref, cwd identity, branch, and session id", 
   // Non-home cwd identity is preserved (not reduced to basename!)
   assert.match(clean[sessionIdx + 2]!, /\/private\/tmp\/sidebar-throwaway/);
 
-  // Branch and 8-char session id
-  const branchSessionLine = clean.find((l) => l.includes("branch") && l.includes("session"));
-  assert.ok(branchSessionLine, "Branch and session row must appear");
-  // The branch ellipsizes to protect the session id, but keeps its leading segment.
-  assert.match(branchSessionLine, /branch feature\/la/);
-  assert.match(branchSessionLine, /…/, "long branch must ellipsize rather than push out the session id");
-  assert.match(branchSessionLine, /session 01a08741/);
+  // Branch rides the header rule; the 8-char session id gets its own row
+  const sessionHeader = clean.find((l) => l.includes("SESSION"));
+  assert.match(sessionHeader!, /SESSION ─+ feature\/layout-fix/);
+  const sessionIdLine = clean.find((l) => l.includes("session 01a08741"));
+  assert.ok(sessionIdLine, "Session id row must appear");
 });
 
 test("message rows show one title per row with fallback", () => {
@@ -202,7 +209,7 @@ test("message rows show one title per row with fallback", () => {
   // Right-aligned pos/total in heading
   const heading = clean.find((l) => l.includes("MESSAGES"));
   assert.ok(heading);
-  assert.match(heading, /MESSAGES\s+2\/2/);
+  assert.match(heading, /MESSAGES ─+ 2\/2/);
 });
 
 test("the files section summarizes edited files between session and messages", () => {
@@ -217,7 +224,7 @@ test("the files section summarizes edited files between session and messages", (
   });
 
   const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
-  const filesIdx = clean.findIndex((l) => /FILES\s+3 files/.test(l));
+  const filesIdx = clean.findIndex((l) => /FILES ─+ 3 files/.test(l));
   assert.ok(filesIdx >= 0, "FILES heading with the distinct-file count must appear");
 
   // Git letter convention in front of front-trimmed paths, repeat count last
@@ -254,8 +261,8 @@ test("Enter and Esc navigate the detail lifecycle", () => {
   assert.ok(detailLines.some((l) => l.includes("MESSAGE")));
   assert.ok(detailLines.some((l) => l.includes("#3")));
   // This message fits, so the hint must not offer a scroll that does nothing.
-  assert.ok(detailLines.some((l) => l.includes("Esc back")));
-  assert.ok(!detailLines.some((l) => l.includes("↑↓ scroll")));
+  assert.ok(detailLines.some((l) => l.includes("[Esc] back")));
+  assert.ok(!detailLines.some((l) => l.includes("[↑↓] scroll")));
 
   // First Esc closes detail, keeping focus
   sidebar.handleInput("\x1b");
@@ -297,7 +304,7 @@ test("selection and follow-tail are preserved under message insertion and detail
   const lines = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
   const detailHeading = lines.find((l) => l.includes("MESSAGE"));
   assert.ok(detailHeading);
-  assert.match(detailHeading, /MESSAGE\s+3\/5/);
+  assert.match(detailHeading, /MESSAGE ─+ 3\/5/);
 });
 
 test("exact height and no overflow across rows 1..11 and 12..55", () => {
@@ -414,7 +421,7 @@ test("the detail hint offers scrolling only when the message overflows", () => {
   const short = makeSidebar({ messages: sampleMessages(1), rows: 30 });
   short.setFocused(true);
   short.handleInput("\r");
-  const shortHint = short.render(SIDEBAR_WIDTH).map(stripAnsi).find((l) => l.includes("Esc back"));
+  const shortHint = short.render(SIDEBAR_WIDTH).map(stripAnsi).find((l) => l.includes("[Esc] back"));
   assert.ok(shortHint);
   assert.ok(!shortHint.includes("scroll"), "a message that fits must not advertise scrolling");
 
@@ -427,9 +434,9 @@ test("the detail hint offers scrolling only when the message overflows", () => {
   });
   long.setFocused(true);
   long.handleInput("\r");
-  const longHint = long.render(SIDEBAR_WIDTH).map(stripAnsi).find((l) => l.includes("Esc back"));
+  const longHint = long.render(SIDEBAR_WIDTH).map(stripAnsi).find((l) => l.includes("[Esc] back"));
   assert.ok(longHint);
-  assert.match(longHint, /↑↓ scroll/);
+  assert.match(longHint, /\[↑↓\] scroll/);
 });
 
 test("a pending summary shows a pulsing dot in the marker cell", () => {
@@ -594,4 +601,56 @@ test("a history shorter than the viewport hugs the hint strip", () => {
   assert.match(clean[rows - 9]!, /unique-message-0/);
   // The spare air collects under the heading, not above the hint.
   assert.equal(clean[rows - 10]!.trim(), "│");
+});
+
+test("the context meter colors track pressure thresholds", () => {
+  const calm = makeSidebar({ messages: sampleMessages(2), rows: 20, usage: { percent: 30 } });
+  const calmRaw = calm.render(SIDEBAR_WIDTH).join("");
+  assert.ok(calmRaw.includes("\x1b[38;5;75m"), "low pressure reads accent");
+  assert.match(calmRaw.replace(/\x1b\[[0-9;]*m/g, ""), /ctx ━+─+ 30%/);
+
+  const warm = makeSidebar({ messages: sampleMessages(2), rows: 20, usage: { percent: 70 } });
+  const warmRaw = warm.render(SIDEBAR_WIDTH).join("");
+  assert.ok(warmRaw.includes("\x1b[38;5;221m"), "approaching pressure reads warning");
+  assert.match(warmRaw.replace(/\x1b\[[0-9;]*m/g, ""), /70%/);
+
+  const hot = makeSidebar({ messages: sampleMessages(2), rows: 20, usage: { percent: 93 } });
+  const hotRaw = hot.render(SIDEBAR_WIDTH).join("");
+  assert.ok(hotRaw.includes("\x1b[38;5;203m"), "critical pressure reads danger");
+  assert.match(hotRaw.replace(/\x1b\[[0-9;]*m/g, ""), /93%/);
+});
+
+test("an unlimited budget drops its label rather than overflowing the meter row", () => {
+  const sidebar = makeSidebar({
+    messages: sampleMessages(2),
+    rows: 22,
+    goal: { objective: "Ship it", status: "active", tokensUsed: 1_234_567, tokenBudget: 0, activeSeconds: 900_000 },
+  });
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const meter = clean.find((l) => l.includes("1.2M"));
+  assert.ok(meter);
+  assert.match(meter, /1\.2M tokens · 10d 10h/);
+  assert.ok(!meter.includes("unlimited"), "the label must drop rather than overflow");
+  assert.ok(!meter.includes("━"), "an uncapped budget draws no meter");
+});
+
+test("a budgeted goal draws its meter with counts and elapsed", () => {
+  const sidebar = makeSidebar({
+    messages: sampleMessages(2),
+    rows: 22,
+    goal: { objective: "Ship it", status: "active", tokensUsed: 1_234_567, tokenBudget: 3_000_000, activeSeconds: 1_500 },
+  });
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const meter = clean.find((l) => l.includes("1.2M"));
+  assert.ok(meter);
+  assert.match(meter, /━━━━────── 1\.2M \/ 3\.0M tokens · 25:00/);
+});
+
+test("a missing goal is a single quiet rule row", () => {
+  const clean = makeSidebar({ messages: sampleMessages(2), rows: 20 }).render(SIDEBAR_WIDTH).map(stripAnsi);
+  const goalRows = clean.filter((l) => l.includes("goal"));
+  assert.equal(goalRows.length, 1, "the absent goal costs exactly one row");
+  assert.match(goalRows[0]!, /── no goal · \/goal <objective> ─+/);
+  const raw = makeSidebar({ messages: sampleMessages(2), rows: 20 }).render(SIDEBAR_WIDTH)[0]!;
+  assert.ok(!raw.includes("\x1b[1m"), "the no-goal row must not be bold");
 });

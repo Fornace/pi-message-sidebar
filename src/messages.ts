@@ -2,7 +2,7 @@ import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { DOT_GLYPH, isSettling, pulse, settlePhase } from "./anim.ts";
 import type { Palette } from "./palette.ts";
 import { fgRgb, rgbLerp } from "./palette.ts";
-import { RAIL_CONTENT, railRow } from "./sections.ts";
+import { RAIL_CONTENT, headerRow, railRow } from "./sections.ts";
 import { RST, clip, formatCount, formatTime, wrapText } from "./style.ts";
 import type { UserMessage } from "./types.ts";
 
@@ -153,7 +153,7 @@ export class MessagePanel {
       const message = this.messages[this.indexForId(this.detailId)];
       const scrollable = message !== undefined
         && detailCapacity(detailRows, this.wrappedDetail(message).length).hasIndicator;
-      return [heading, ...detail, this.hintRow(palette, scrollable ? "Esc back · ↑↓ scroll" : "Esc back")].slice(0, rows);
+      return [heading, ...detail, this.hintRow(palette, scrollable ? "[Esc] back  [↑↓] scroll" : "[Esc] back")].slice(0, rows);
     }
 
     // The setup hint replaces the spacer row under the heading; a message
@@ -167,7 +167,7 @@ export class MessagePanel {
       ...(showSetupHint ? [railRow(palette, `${palette.meta}${SETUP_HINT}${RST}`, palette.bgBase)] : []),
       ...(spacer ? [railRow(palette, "", palette.bgBase)] : []),
       ...this.renderViewport(viewportRows, focused, palette, now),
-      this.hintRow(palette, focused ? "↑↓ select · Enter open · c copy" : "Ctrl+Shift+H focus"),
+      this.hintRow(palette, focused ? "[↑↓] select  [↵] open  [c] copy" : "[Ctrl+Shift+H] focus"),
     ];
     while (sections.length < rows) sections.push(railRow(palette, "", palette.bgBase));
     return sections.slice(0, rows);
@@ -176,8 +176,7 @@ export class MessagePanel {
   // --- list rendering ------------------------------------------------------
 
   private headingRow(palette: Palette, label: string, right: string): string {
-    const gap = Math.max(1, RAIL_CONTENT - visibleWidth(label) - visibleWidth(right));
-    return railRow(palette, `${palette.label}${label}${RST}${" ".repeat(gap)}${palette.meta}${right}${RST}`, palette.bgBase);
+    return headerRow(palette, label, palette.bgBase, `${palette.meta}${right}${RST}`);
   }
 
   private hintRow(palette: Palette, text: string): string {

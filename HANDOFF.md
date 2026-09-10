@@ -1,9 +1,9 @@
-# Handoff — pi-message-sidebar, after the 1.9.0 visual series
+# Handoff — pi-message-sidebar, after the 1.10.0 refinement series
 
-Written 2026-09-10, updated the same day after the 1.8.0 and 1.9.0 series.
-Repo `/Users/ffrappo/repos/pi-message-sidebar`, tree clean, **unpushed
-commits** (1.7.0 hardening plus 1.8.0 plus 1.9.0; `git log --oneline` for
-the exact count). The original 1.7.0 repair handoff (an audit
+Written 2026-09-10, updated the same day after the 1.8.0, 1.9.0, and 1.10.0
+series. Repo `/Users/ffrappo/repos/pi-message-sidebar`, tree clean,
+**unpushed commits** (1.7.0 hardening through 1.10.0; `git log --oneline`
+for the exact count). The original 1.7.0 repair handoff (an audit
 listing eight defect groups; the file has since been deleted from `_tmp/`) is
 fully discharged — every group is fixed and covered by tests, and the commit
 messages in `b86668e..451bc18` record which change closed what. This document
@@ -14,7 +14,7 @@ is for what comes next.
 ```bash
 cd /Users/ffrappo/repos/pi-message-sidebar
 git log --oneline -9          # b86668e..451bc18 is this series
-npm run typecheck && npm test # must be clean / 64 pass
+npm run typecheck && npm test # must be clean / 68 pass
 ```
 
 `~/.pi/agent/extensions/message-sidebar` is a **symlink to this repo**, so pi
@@ -27,13 +27,13 @@ tag push). Defects here reach people who are not Francesco — that is why the
 
 ## State
 
-64 tests: `goal` 10, `sidebar` 27, `summaries` 7, `messages` 5, `files` 3,
-`git-status` 4, `status-dock` 4, `layout` 3. Gates all green at the 1.9.0 tip:
+68 tests: `goal` 10, `sidebar` 31, `summaries` 9, `messages` 5, `files` 3,
+`git-status` 4, `status-dock` 4, `layout` 3. Gates all green at the 1.10.0 tip:
 
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npm run typecheck` | clean |
-| Unit | `npm test` | 64/64 |
+| Unit | `npm test` | 68/68 |
 | Entry point | `npm run test:load` | loads |
 | PTY | `npm run test:pty` | 4/4 |
 | PTY matrix | `npm run test:pty:matrix` | 8/8 |
@@ -168,6 +168,14 @@ current HEAD in every message so the other side can tell whether it is behind.
   when shorter than the viewport so spare air sits under the heading instead of
   opening a hole above the hint. The leak invariant (no bare reset before visible
   text mid-row) is covered by a sidebar test; keep it when touching row assembly.
+- 1.10.0 additions: section headers embed their labels in the rules
+  (`headerRow` in `src/sections.ts`) with right-aligned metadata, and there
+  are no standalone separator rows anymore (`RULE_ROWS` is gone; minimum
+  height 14/11). `meterBar` draws `━━━──────` meters for the goal budget and
+  context pressure with 60/85 percent color thresholds; unlimited budgets and
+  unknown percentages draw no meter. The bottom-anchor regression test indexes
+  off the hint strip (`[Ctrl+Shift+H]`), not absolute rows — keep that pattern
+  when reshuffling sections.
 - `_tmp/latency.mts` is the gateway microbench that replaced pi-bench for
   route selection; `_tmp/preview.mts` renders the rail offline for eyes.
 - The adversarial review (fornace-max critic) found two fatal render crashes

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.10.0
+
+> Embedded section headers, usage meters, and a tighter rail: every section now spends one row where it used to spend two.
+
+- Section headers embed their label in the rule itself (`── SESSION ───────── main`) with right-aligned metadata: branch for SESSION, status for GOAL, position for MESSAGES, thinking level for RUNTIME, count for FILES. The old label-row-plus-separator pairs are gone; the minimum rail shrinks from 17 to 14 rows and the message viewport grows by three.
+- Usage meters in the same language as the rules: `━━━━──────`. The goal budget row draws its meter with counts and elapsed time (compacting when crowded, drawing nothing for unlimited budgets), and the runtime context row meters context pressure with color thresholds: accent normally, warning at 60 percent, danger at 85. Goal states override: complete reads green, budget-limited or over-budget reads danger.
+- A missing goal is now a single quiet rule row (`── no goal · /goal <objective> ──`) instead of a three-row block.
+- Hint strips use bracketed keys: `[Ctrl+Shift+H] focus`, `[↑↓] select  [↵] open  [c] copy`, `[Esc] back  [↑↓] scroll`.
+- Budget allocation between sections is content-first: the session id row, then FILES rows, then goal breathing, then runtime breath, with everything else to the message viewport.
+
 ## 1.9.0
 
 > Theme-harmonized rail: universal content colors, a three-step background ladder, git-style file badges, age fade, and pi-recap motion.

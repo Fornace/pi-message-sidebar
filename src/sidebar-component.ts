@@ -15,7 +15,7 @@ import { readSessionGoal } from "./goal.ts";
 import { assertLinesFit } from "./layout.ts";
 import { MessagePanel } from "./messages.ts";
 import { resolvePalette } from "./palette.ts";
-import { renderGoalSection, renderRuntimeSection, renderSessionSection, ruleRow } from "./sections.ts";
+import { renderGoalSection, renderRuntimeSection, renderSessionSection } from "./sections.ts";
 import { RST, fillRow } from "./style.ts";
 
 import type { UserMessage } from "./types.ts";
@@ -40,22 +40,22 @@ type SidebarOptions = {
 
 type Layout = { goal: number; session: number; runtime: number; messages: number };
 
-const RULE_ROWS = 3;
-/** Rows a section cannot render without losing content it is required to show. */
+/** Rows a section cannot render without losing content it is required to show.
+ *  Section headers embed their own rules, so no separator rows are budgeted. */
 const MANDATORY = {
-  /** blank + GOAL + title + status + budget; the no-goal state is GOAL + guidance. */
-  goal: (hasGoal: boolean) => (hasGoal ? 5 : 3),
-  /** label + surface/workspace + cwd. */
+  /** header + title + title + budget meter; the no-goal state is a single rule row. */
+  goal: (hasGoal: boolean) => (hasGoal ? 4 : 1),
+  /** header + surface/workspace + cwd. */
   session: 3,
-  /** heading + one two-row message + hint. */
+  /** header + one two-row message + hint. */
   messages: 4,
-  /** model route + ctx/cost. */
-  runtime: 2,
+  /** header + model route + ctx meter. */
+  runtime: 3,
 } as const;
 
 /** Smallest terminal that can hold every mandatory row; below it the rail shows a notice. */
 export function minimumHeight(hasGoal: boolean): number {
-  return MANDATORY.goal(hasGoal) + MANDATORY.session + MANDATORY.messages + MANDATORY.runtime + RULE_ROWS;
+  return MANDATORY.goal(hasGoal) + MANDATORY.session + MANDATORY.messages + MANDATORY.runtime;
 }
 
 /**
@@ -78,15 +78,15 @@ function allocate(height: number, hasGoal: boolean, hasFiles: boolean): Layout |
     take(granted);
     spare -= granted;
   };
-  grow(1, (granted) => { session += granted; });        // branch · session id
-  if (hasGoal) grow(4, (granted) => { goal += granted; }); // second title line and spacing
+  grow(1, (granted) => { session += granted; });          // session id row
   if (hasFiles) {
-    // FILES lives inside the session block: heading plus file rows. It needs
+    // FILES lives inside the session block: header plus file rows. It needs
     // both to be worth anything, so a cramped rail leaves it out entirely.
     const granted = Math.min(3, spare);
     if (granted >= 2) { session += granted; spare -= granted; }
   }
-  grow(1, (granted) => { runtime += granted; });        // trailing breath under the runtime rows
+  if (hasGoal) grow(3, (granted) => { goal += granted; }); // breathing around title and meter
+  grow(1, (granted) => { runtime += granted; });          // trailing breath under the meter
 
   return { goal, session, runtime, messages: MANDATORY.messages + spare };
 }
@@ -211,14 +211,11 @@ export class SidebarComponent implements Component {
     const now = Date.now();
     const lines: string[] = [];
     lines.push(...renderGoalSection(readSessionGoal(ctx), layout.goal, palette));
-    lines.push(ruleRow(palette));
     lines.push(...renderSessionSection(
       ctx, this.options.getFooterData(), this.options.getCmuxContext(),
       layout.session, palette, files, this.options.getGitStatus,
     ));
-    lines.push(ruleRow(palette));
     lines.push(...this.panel.renderSection(layout.messages, this.focused, palette, now));
-    lines.push(ruleRow(palette));
     lines.push(...renderRuntimeSection(ctx, this.options.getFooterData(), this.options.getThinkingLevel(), layout.runtime, palette));
     return lines;
   }
