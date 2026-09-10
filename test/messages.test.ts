@@ -50,3 +50,13 @@ test("entry id and timestamp are carried through for selection and the detail he
   assert.equal(messages[0]!.id, "entry-7");
   assert.equal(messages[0]!.timestamp, "2026-09-10T09:30:00Z");
 });
+
+test("pasted escape sequences are stripped at the collection boundary", () => {
+  const messages = collectUserMessages(contextWith([
+    userEntry("ansi", "before \u001b[41mRED BG\u001b[0m mid \u001b]0;evil title\u0007 after"),
+  ]));
+
+  assert.equal(messages.length, 1);
+  assert.ok(!messages[0]!.text.includes("\u001b"), "no escape may reach the rail");
+  assert.match(messages[0]!.text, /before RED BG mid  after/);
+});

@@ -14,7 +14,6 @@ export class GitStatusProvider {
   private status = new Map<string, string>();
   private readonly realpaths = new Map<string, string>();
   private toplevel: string | null = null;
-  private toplevelFailed = false;
   private lastRun = 0;
   private inflight: Promise<void> | null = null;
   lastError: string | null = null;
@@ -22,7 +21,7 @@ export class GitStatusProvider {
   constructor(
     private readonly refreshIntervalMs = 4000,
     private readonly exec: (file: string, args: string[], cwd: string) => Promise<string> = async (file, args, cwd) => {
-      const { stdout } = await run(file, args, { cwd, timeout: 5000 });
+      const { stdout } = await run(file, args, { cwd, timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
       return stdout;
     },
   ) {}
@@ -64,7 +63,9 @@ export class GitStatusProvider {
 
   private async run(cwd: string): Promise<void> {
     try {
-      if (this.toplevel === null && !this.toplevelFailed) {
+      // The root is retried on every throttled refresh: one transient
+      // failure must not disable badges for the whole session.
+      if (this.toplevel === null) {
         try {
           const root = (await this.exec("git", ["rev-parse", "--show-toplevel"], cwd)).trim();
           // macOS hands out /var/folders symlinks; git reports /private/var.
@@ -73,13 +74,12 @@ export class GitStatusProvider {
           } catch {
             this.toplevel = root;
           }
-        } catch {
-          this.toplevelFailed = true;
-          this.toplevel = null;
+        } catch (error) {
+          this.lastError = error instanceof Error ? error.message : String(error);
+          return;
         }
       }
-      if (this.toplevel === null) return;
-      const stdout = await this.exec("git", ["status", "--porcelain=v1", "-z"], cwd);
+      const stdout = await this.exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd);
       const next = new Map<string, string>();
       // -z records: "XY path\0" with an extra "origPath\0" record for renames.
       const records = stdout.split("\0");

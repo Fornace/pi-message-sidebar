@@ -35,6 +35,19 @@ export function clip(text: string, width: number): string {
   return `${out}…`;
 }
 
+/**
+ * Strips OSC, CSI, and control sequences from pasted prompt text at the
+ * collection boundary. The rail is a display: raw escapes from pasted
+ * terminal output would otherwise repaint cells, retitle the window, or
+ * split mid-sequence inside width math.
+ */
+export function stripControl(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, " ");
+}
+
 /** Compact counts: 940, 1.4k, 12k, 1.2M. */
 export function formatCount(count: number): string {
   if (!Number.isFinite(count) || count < 0) return "?";

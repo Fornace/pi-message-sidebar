@@ -513,3 +513,55 @@ test("no rail row leaks the terminal default foreground mid-row", () => {
     sidebar.invalidate();
   }
 });
+
+test("the animation tick starts while a summary is pending and stops once idle", async () => {
+  const pending: string[] = ["id-0"];
+  const sidebar = makeSidebar({ messages: sampleMessages(2), rows: 25, pending });
+  const timer = () => (sidebar as unknown as { animTimer: unknown }).animTimer;
+
+  sidebar.render(SIDEBAR_WIDTH);
+  assert.ok(timer(), "a pending summary must start the tick");
+
+  pending.length = 0;
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(timer(), null, "the tick must stop once nothing animates");
+});
+
+test("an open detail never overruns its budget at cramped heights", () => {
+  // The crash band: a two-row detail grant used to emit header + text +
+  // indicator and kill the TUI inside pi's render loop.
+  const wrapping = [{
+    id: "w", index: 1, timestamp: new Date(2026, 8, 10, 2, 16).toISOString(),
+    text: "a prompt long enough to wrap across the rail width several times over and over again",
+  }];
+  for (const goal of [undefined, GOAL]) {
+    for (let rows = minimumHeight(Boolean(goal)); rows <= minimumHeight(Boolean(goal)) + 12; rows++) {
+      const sidebar = makeSidebar({ messages: wrapping, rows, goal });
+      sidebar.setFocused(true);
+      sidebar.handleInput("\r");
+      const lines = sidebar.render(SIDEBAR_WIDTH);
+      assert.equal(lines.length, rows, `detail at rows=${rows} goal=${Boolean(goal)}`);
+      assert.ok(lines.every((l) => visibleWidth(l) === SIDEBAR_WIDTH));
+    }
+  }
+});
+
+test("a preserved viewport anchor survives list shrink and terminal grow", () => {
+  const history = sampleMessages(10);
+  const sidebar = makeSidebar({ messages: history, rows: 12 });
+  sidebar.setFocused(true);
+  for (let i = 0; i < 3; i++) sidebar.handleInput("\x1b[A");
+
+  for (const rows of [14, 18, 22, 30]) {
+    (sidebar as unknown as { options: { tui: { terminal: { rows: number } } } }).options.tui.terminal.rows = rows;
+    sidebar.invalidate();
+    const lines = sidebar.render(SIDEBAR_WIDTH);
+    assert.equal(lines.length, rows, `grow to ${rows} must not throw or misfill`);
+  }
+
+  // Compaction drops the tail while the anchor stays mid-list.
+  sidebar.updateMessages(history.slice(0, 7).map((m, i) => ({ ...m, index: i + 1 })));
+  const lines = sidebar.render(SIDEBAR_WIDTH);
+  assert.equal(lines.length, 30);
+  assert.ok(lines.every((l) => visibleWidth(l) === SIDEBAR_WIDTH));
+});

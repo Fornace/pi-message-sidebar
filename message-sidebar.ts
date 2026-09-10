@@ -13,6 +13,7 @@ import { GitStatusProvider } from "./src/git-status.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
 import { SidebarComponent } from "./src/sidebar-component.ts";
 import { isGatewayConfigured, SummaryService, fallbackSummary } from "./src/summaries.ts";
+import { stripControl } from "./src/style.ts";
 import type { UserMessage } from "./src/types.ts";
 
 function extractUserText(message: { content: unknown }): string {
@@ -30,7 +31,7 @@ export function collectUserMessages(ctx: ExtensionContext): UserMessage[] {
   const messages: UserMessage[] = [];
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type !== "message" || entry.message.role !== "user") continue;
-    const text = extractUserText(entry.message).trim();
+    const text = stripControl(extractUserText(entry.message)).trim();
     // A user turn with no text (image-only, say) is not shown, so it must not
     // consume an ordinal: the detail's "#N" has to match the heading's "N/total".
     if (text) messages.push({ id: entry.id, text, index: messages.length + 1, timestamp: entry.timestamp });

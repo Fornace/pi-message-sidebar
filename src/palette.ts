@@ -110,7 +110,7 @@ export function resolvePalette(theme: Theme | null): Palette {
       bgBase: ladder.base,
       bgRaised: ladder.raised,
       bgSunken: ladder.sunken,
-      bgSelected: "\x1b[48;5;238m",
+      bgSelected: light ? "\x1b[48;5;250m" : "\x1b[48;5;238m",
       rule: FALLBACK.rule,
       label: FALLBACK.label,
       meta: content.meta,

@@ -34,7 +34,12 @@ export function detailCapacity(rows: number, wrappedCount: number): { textCapaci
   if (wrappedCount <= available) {
     return { textCapacity: available, hasIndicator: false, maxScroll: 0 };
   }
-  const textCapacity = Math.max(1, available - 1);
+  // A two-row grant leaves no room for text plus indicator: the indicator
+  // becomes the only body row and reports the scroll position instead.
+  if (available <= 1) {
+    return { textCapacity: 0, hasIndicator: true, maxScroll: Math.max(0, wrappedCount - 1) };
+  }
+  const textCapacity = available - 1;
   const maxScroll = Math.max(0, wrappedCount - textCapacity);
   return { textCapacity, hasIndicator: true, maxScroll };
 }
@@ -143,12 +148,12 @@ export class MessagePanel {
 
     if (this.detailId) {
       const detailRows = Math.max(1, rows - 2);
-      const detail = this.renderDetail(this.detailId, detailRows, palette);
+      const detail = this.renderDetail(this.detailId, detailRows, palette).slice(0, detailRows);
       // Only offer scrolling when there is something below the fold.
       const message = this.messages[this.indexForId(this.detailId)];
       const scrollable = message !== undefined
         && detailCapacity(detailRows, this.wrappedDetail(message).length).hasIndicator;
-      return [heading, ...detail, this.hintRow(palette, scrollable ? "Esc back · ↑↓ scroll" : "Esc back")];
+      return [heading, ...detail, this.hintRow(palette, scrollable ? "Esc back · ↑↓ scroll" : "Esc back")].slice(0, rows);
     }
 
     // The setup hint replaces the spacer row under the heading; a message
@@ -235,7 +240,7 @@ export class MessagePanel {
       const step = Math.round(pulse(now, 0) * (palette.dotFallback.length - 1));
       return `${palette.dotFallback[step] ?? palette.meta}${DOT_GLYPH}${RST}`;
     }
-    if (selected && focused) return palette.accent;
+    if (selected && focused) return `${palette.accent}›${RST}`;
     return " ";
   }
 
@@ -308,6 +313,9 @@ export class MessagePanel {
     if (!this.followTail && preserved >= 0 && selected >= preserved && selected - preserved < slots) {
       start = preserved;
     }
+    // A grow or a compaction can leave the preserved anchor beyond the new
+    // list; an unclamped start would run the window past the last message.
+    start = Math.max(0, Math.min(start, this.messages.length - slots));
     return { start, end: start + slots };
   }
 
@@ -337,12 +345,13 @@ export class MessagePanel {
     const visible = wrapped.slice(this.detailScroll, this.detailScroll + textCapacity);
     const lines = [header, ...visible.map((line) => railRow(palette, `${palette.textMid}${line}${RST}`, palette.bgRaised))];
     if (hasIndicator) {
-      const first = visible.length > 0 ? this.detailScroll + 1 : 0;
-      const last = this.detailScroll + visible.length;
-      lines.push(railRow(palette, `${palette.meta}${first}-${last} of ${wrapped.length} · ↑↓ scroll${RST}`, palette.bgRaised));
+      const position = visible.length > 0
+        ? `${this.detailScroll + 1}-${this.detailScroll + visible.length} of ${wrapped.length}`
+        : `line ${Math.min(this.detailScroll + 1, wrapped.length)} of ${wrapped.length}`;
+      lines.push(railRow(palette, `${palette.meta}${position} · ↑↓ scroll${RST}`, palette.bgRaised));
     }
     while (lines.length < rows) lines.push(railRow(palette, "", palette.bgRaised));
-    return lines;
+    return lines.slice(0, rows);
   }
 
   /** Wrapping is O(message length); a detail stays open across many keystrokes and renders. */
