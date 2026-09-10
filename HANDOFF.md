@@ -1,8 +1,9 @@
-# Handoff — pi-message-sidebar, after the 1.8.0 summary redesign
+# Handoff — pi-message-sidebar, after the 1.9.0 visual series
 
-Written 2026-09-10, updated the same day after the 1.8.0 series. Repo
-`/Users/ffrappo/repos/pi-message-sidebar`, tree clean, **unpushed commits**
-(1.7.0 hardening plus 1.8.0; `git log --oneline` for the exact count). The original 1.7.0 repair handoff (an audit
+Written 2026-09-10, updated the same day after the 1.8.0 and 1.9.0 series.
+Repo `/Users/ffrappo/repos/pi-message-sidebar`, tree clean, **unpushed
+commits** (1.7.0 hardening plus 1.8.0 plus 1.9.0; `git log --oneline` for
+the exact count). The original 1.7.0 repair handoff (an audit
 listing eight defect groups; the file has since been deleted from `_tmp/`) is
 fully discharged — every group is fixed and covered by tests, and the commit
 messages in `b86668e..451bc18` record which change closed what. This document
@@ -26,13 +27,13 @@ tag push). Defects here reach people who are not Francesco — that is why the
 
 ## State
 
-47 tests: `goal` 9, `sidebar` 16, `summaries` 6, `messages` 4, `files` 3,
-`status-dock` 4, `layout` 3. Gates all green at the 1.8.0 tip:
+56 tests: `goal` 9, `sidebar` 21, `summaries` 7, `messages` 4, `files` 3,
+`git-status` 3, `status-dock` 4, `layout` 3. Gates all green at the 1.9.0 tip:
 
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npm run typecheck` | clean |
-| Unit | `npm test` | 47/47 |
+| Unit | `npm test` | 56/56 |
 | Entry point | `npm run test:load` | loads |
 | PTY | `npm run test:pty` | 4/4 |
 | PTY matrix | `npm run test:pty:matrix` | 8/8 |
@@ -75,7 +76,18 @@ Nothing is broken. These are decisions and known rough edges, roughly by value.
 **1. Push or not.** Nine commits are local. Francesco reviews first — that was
 the standing instruction, not an invention. Nothing is tagged or published.
 
-**3. Deliberate spec deviation: `MANDATORY.session = 3`, not 4.** The original
+**3. pi-bench is broken against pi 0.84.x.** `bench.mts` imports
+`AuthStorage` from the package root; 0.84 no longer re-exports it (the class
+still lives in `dist/core/auth-storage`, but the exports map blocks deep
+imports), and `ModelRegistry.create(authStorage)` is gone too (the registry
+now wraps a non-exported `ModelRuntime`). The fix belongs in the pi-bench
+repo: rebuild provider loading on the 0.84 API. Until then the sidebar's
+summary route was chosen by a direct gateway microbench (`_tmp/latency.mts`):
+fornace-flash 739 ms TTFB, everything else 1.1-3.1 s or failing. Re-run that
+microbench, not pi-bench, when revisiting the route; `PI_SIDEBAR_SUMMARY_MODEL`
+overrides it per machine.
+
+**4. Deliberate spec deviation: `MANDATORY.session = 3`, not 4.** The original
 1.7.0 audit listed `branch · session id` as a mandatory row. I made it the *first
 optional* row instead, so a 14-row terminal renders a working rail rather than
 a resize notice; at any normal height the row is present. `minimumHeight()` is
@@ -83,25 +95,25 @@ a resize notice; at any normal height the row is present. `minimumHeight()` is
 other agent reviewed and agreed, but it is still a deviation from what
 Francesco specified — flip it in `MANDATORY` if he wants the spec honoured.
 
-**4. Only the newest 10 history messages get seeded summaries** (`SummaryService.seed`).
+**5. Only the newest 10 history messages get seeded summaries** (`SummaryService.seed`).
 Older messages in a long restored session keep deterministic fallback titles
 forever. Deliberate and documented, but if Francesco wants full history titled,
 that is the knob — mind the gateway cost on a 131-message session.
 
-**5. Every event triggers a full re-render.** `scheduleRefresh` →
+**6. Every event triggers a full re-render.** `scheduleRefresh` →
 `updateMessages` → `refresh()` → `version++` → new signature → the render cache
 misses. Verified by reading, not measured. At 42×55 it is cheap, so this is
 noted rather than a problem. If it ever matters, the fix is to skip the version
 bump when the message list is unchanged — but note that title arrivals also
 come through `updateMessages`, so they would need their own repaint path.
 
-**6. Unverified suspicion: the widget factory may recreate `SidebarComponent`
+**7. Unverified suspicion: the widget factory may recreate `SidebarComponent`
 on a TUI mode switch**, losing focus, selection and viewport anchor. I did not
 confirm this. To check: switch `--tui-mode` at runtime with a message selected
 and see whether the selection survives. `SidebarLayoutBridge` refcounts
 correctly either way, so there is no leak — only state loss.
 
-**7. Trivia.** `runningInCmux`, `SIDEBAR_GAP`, `GoalStatus`, `Usage`,
+**8. Trivia.** `runningInCmux`, `SIDEBAR_GAP`, `GoalStatus`, `Usage`,
 `UsageTotals` and `hasModelTitle` are exported but used only inside their own
 module or by tests. `formatElapsed` mixes styles (`45s`, then `24:36`, then
 `2h 05m`); the `mm:ss` band can read as `hh:mm` next to the word "elapsed".
@@ -143,10 +155,18 @@ current HEAD in every message so the other side can tell whether it is behind.
   package ships to people without the gateway.
 - 1.8.0 additions worth knowing: messages are two-row slots (marker, 3-cell
   ordinal, time, 28-cell summary lines) in `src/messages.ts`; ellipsis rows
-  count hidden messages; `src/files.ts` feeds a FILES section from edit/write/
-  fast_write tool calls; `src/summaries.ts` is the renamed titles service with
-  a one-sentence prompt. Stored summaries may end in `\x1b[0m…\x1b[0m` — that
-  is `truncateToWidth`'s ANSI-wrapped ellipsis, not model garbage.
+  count hidden messages; `src/files.ts` feeds the FILES subsection (inside the
+  SESSION block since 1.9.0) from edit/write/fast_write tool calls;
+  `src/summaries.ts` is the renamed titles service with a one-sentence prompt.
+- 1.9.0 additions: `src/palette.ts` resolves theme tokens plus universal
+  content grays (pi-recap's trick: a theme's `text` token can be a saturated
+  hue, Francesco's is pure green) and a three-step background ladder;
+  `src/anim.ts` + the panel's `needsAnim` drive a 90 ms tick that exists only
+  while a dot pulses or a settle sweep runs; `src/git-status.ts` supplies the
+  M/A/U/D/R badges. The leak invariant (no bare reset before visible text
+  mid-row) is covered by a sidebar test; keep it when touching row assembly.
+- `_tmp/latency.mts` is the gateway microbench that replaced pi-bench for
+  route selection; `_tmp/preview.mts` renders the rail offline for eyes.
 - Populated sessions for gates:
   `~/.pi/agent/sessions/--Users-ffrappo-works-repos-mantice--/` (131 messages).
 - Scratch goes in `_tmp/` (gitignored). Durable docs in `docs/`.
