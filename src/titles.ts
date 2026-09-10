@@ -21,6 +21,10 @@ const PROMPT_VERSION = 1;
 const STORED_MAX_CELLS = 48;
 const DISPLAY_MAX_CELLS = 36;
 const INPUT_MAX_CHARS = 600;
+/** How many recent messages stay eligible for their one sharpening pass. */
+const REFINE_WINDOW = 4;
+/** The newest message is re-titled this often, to catch drift in a long thread. */
+const TITLE_REFRESH_TURNS = 10;
 
 const SYSTEM_PROMPT = [
   "You write short titles for a developer's chat prompts.",
@@ -67,8 +71,9 @@ function titlesDir(): string {
  * Generates short message titles with a cheap model (fornace-flash via the
  * mantice gateway).
  *
- * Lifecycle per message: initial title once its first turn completes, one
- * refinement after the following turn, then a context refresh every 10 turns.
+ * Lifecycle per message: an initial title once its turn completes, one
+ * refinement on a following turn while it is still in the recent window, and
+ * a refresh of the newest message every tenth turn.
  * Titles are cached per session and persisted to disk; generation never runs
  * on the render path and failures degrade to the deterministic fallback.
  */
@@ -95,17 +100,29 @@ export class TitleService {
     this.load();
   }
 
-  /** Turn counter drives the cadence: initial after turn 1, refine after turn 2, refresh every 10 turns. */
+  /**
+   * Newest message gets its first title; anything still on its first title
+   * within the recent window gets one sharpening pass on a later turn; the
+   * newest is refreshed every tenth turn.
+   *
+   * The window matters: a turn normally arrives with a *new* newest message,
+   * so a cadence that only ever looked at `messages.at(-1)` would hand every
+   * message an initial title and never refine anything.
+   */
   turnCompleted(messages: readonly UserMessage[]): void {
     if (this.disposed) return;
     this.turns++;
     const latest = messages.at(-1);
     if (!latest) return;
-    const record = this.cache.get(latest.id);
-    if (!record && !this.inFlight.has(latest.id)) {
+
+    if (!this.cache.has(latest.id) && !this.inFlight.has(latest.id)) {
       this.enqueue(latest, "initial");
-    } else if (this.inFlight.has(latest.id) || record?.generations === 1 || this.turns % 10 === 0) {
+    } else if (this.inFlight.has(latest.id) || this.turns % TITLE_REFRESH_TURNS === 0) {
       this.enqueue(latest, "refine");
+    }
+
+    for (const message of messages.slice(-REFINE_WINDOW)) {
+      if (this.cache.get(message.id)?.generations === 1) this.enqueue(message, "refine");
     }
     void this.drain();
   }
