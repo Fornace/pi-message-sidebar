@@ -9,8 +9,9 @@ import type { CmuxContext } from "./src/cmux.ts";
 import { resolveCmuxContext } from "./src/cmux.ts";
 import { isSidebarVisible } from "./src/constants.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
-import { SidebarComponent, type UserMessage } from "./src/sidebar-component.ts";
+import { SidebarComponent } from "./src/sidebar-component.ts";
 import { fallbackTitle, TitleService } from "./src/titles.ts";
+import type { UserMessage } from "./src/types.ts";
 
 function extractUserText(message: { content: unknown }): string {
   if (typeof message.content === "string") return message.content;
@@ -96,7 +97,12 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     cachedContext = ctx;
-    titles = new TitleService(ctx.sessionManager.getSessionId(), () => scheduleRefresh(ctx));
+    titles = new TitleService(
+      ctx.sessionManager.getSessionId(),
+      () => scheduleRefresh(ctx),
+      undefined,
+      (err) => ctx.ui.notify(err, "warning"),
+    );
     titles.seed(collectUserMessages(ctx));
     void resolveCmuxContext().then((resolved) => {
       cmuxContext = resolved;
@@ -154,6 +160,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
+    titles?.dispose();
     titles = null;
     sidebar = null;
     tui = null;
