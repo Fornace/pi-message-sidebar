@@ -1,25 +1,5 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
-export const BG = "\x1b[48;5;232m";
-export const BG_SEL = "\x1b[48;5;237m";
-/** Hint strip under the message list. */
-export const BG_HINT = "\x1b[48;5;233m";
-/** Goal block: the strongest ground in the rail. */
-export const BG_GOAL = "\x1b[48;5;236m";
-export const BG_DETAIL = "\x1b[48;5;235m";
-export const FG_RULE = "\x1b[38;5;240m";
-export const FG_SECONDARY = "\x1b[38;5;246m";
-export const FG_PRIMARY = "\x1b[38;5;252m";
-export const FG_STATUS_ACTIVE = "\x1b[38;5;117m";
-export const FG_STATUS_DONE = "\x1b[38;5;150m";
-export const FG_STATUS_WAIT = "\x1b[38;5;221m";
-export const FG_FAINT = "\x1b[38;5;240m";
-export const FG_DIM = "\x1b[38;5;243m";
-export const FG_BRIGHT = "\x1b[38;5;255m";
-export const FG_ACC = "\x1b[38;5;75m";
-export const FG_INFO = "\x1b[38;5;80m";
-export const FG_ERR = "\x1b[38;5;203m";
-export const FG_EXP = "\x1b[38;5;252m";
 export const BOLD = "\x1b[1m";
 export const RST = "\x1b[0m";
 
@@ -32,6 +12,36 @@ export function fillRow(content: string, width: number, bg: string): string {
 
 export function wrapText(text: string, width: number): string[] {
   return wrapTextWithAnsi(text.replace(/\s+/g, " ").trim(), Math.max(1, width));
+}
+
+/**
+ * Plain-text truncation with a trailing ellipsis. Unlike pi-tui's
+ * truncateToWidth it never emits reset sequences, so coloring the result
+ * afterwards cannot leak the terminal's default foreground mid-row.
+ */
+export function clip(text: string, width: number): string {
+  const safe = Math.max(0, Math.floor(width));
+  if (safe === 0) return "";
+  if (visibleWidth(text) <= safe) return text;
+  if (safe === 1) return "…";
+  let cells = 0;
+  let out = "";
+  for (const char of text) {
+    const cellWidth = visibleWidth(char);
+    if (cells + cellWidth > safe - 1) break;
+    out += char;
+    cells += cellWidth;
+  }
+  return `${out}…`;
+}
+
+/** Compact counts: 940, 1.4k, 12k, 1.2M. */
+export function formatCount(count: number): string {
+  if (!Number.isFinite(count) || count < 0) return "?";
+  if (count < 1_000) return String(count);
+  if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
 export function formatCost(cost: number): string {
@@ -90,6 +100,6 @@ export function ellipsizePath(path: string, width: number): string {
     const candidate = `…/${parts.slice(index).join("/")}`;
     if (visibleWidth(candidate) <= width) return candidate;
   }
-  return `…${truncateToWidth(parts.at(-1) ?? path, Math.max(0, width - 1), "")}`;
+  return `…${clip(parts.at(-1) ?? path, Math.max(0, width - 1))}`;
 }
 

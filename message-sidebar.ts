@@ -9,6 +9,7 @@ import type { CmuxContext } from "./src/cmux.ts";
 import { resolveCmuxContext } from "./src/cmux.ts";
 import { isSidebarVisible } from "./src/constants.ts";
 import { readSessionFileEdits } from "./src/files.ts";
+import { GitStatusProvider } from "./src/git-status.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
 import { SidebarComponent } from "./src/sidebar-component.ts";
 import { isGatewayConfigured, SummaryService, fallbackSummary } from "./src/summaries.ts";
@@ -68,6 +69,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   let footerData: ReadonlyFooterDataProvider | null = null;
   let cmuxContext: CmuxContext | null = null;
   let summaries: SummaryService | null = null;
+  const gitStatus = new GitStatusProvider();
   let refreshQueued = false;
 
   const scheduleRefresh = (ctx: ExtensionContext | null = cachedContext) => {
@@ -106,6 +108,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
       (err) => ctx.ui.notify(err, "warning"),
     );
     summaries.seed(collectUserMessages(ctx));
+    void gitStatus.refresh(ctx.sessionManager.getCwd(), true);
     void resolveCmuxContext().then((resolved) => {
       cmuxContext = resolved;
       scheduleRefresh(ctx);
@@ -120,10 +123,13 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           getFooterData: () => footerData,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getCmuxContext: () => cmuxContext,
+          getTheme: () => ctx.ui.theme,
           getSummary: (messageId, text) => summaries?.get(messageId, text) ?? fallbackSummary(text),
           hasSummary: (messageId) => summaries?.hasSummary(messageId) ?? false,
+          isPending: (messageId) => summaries?.isPending(messageId) ?? false,
           summariesConfigured: isGatewayConfigured,
           getEditedFiles: () => readSessionFileEdits(ctx),
+          getGitStatus: (path) => gitStatus.statusFor(path),
           messages: collectUserMessages(ctx),
         });
         return new SidebarLayoutBridge(currentTui, sidebar);
@@ -160,6 +166,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
+    sidebar?.stopAnimations();
     summaries?.dispose();
     summaries = null;
     sidebar = null;
@@ -182,9 +189,13 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("turn_end", (_event, ctx) => {
     summaries?.turnCompleted(collectUserMessages(ctx));
+    void gitStatus.refresh(ctx.sessionManager.getCwd());
     scheduleRefresh(ctx);
   });
-  pi.on("agent_end", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("agent_end", (_event, ctx) => {
+    void gitStatus.refresh(ctx.sessionManager.getCwd());
+    scheduleRefresh(ctx);
+  });
   pi.on("agent_settled", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("model_select", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("thinking_level_select", (_event, ctx) => scheduleRefresh(ctx));

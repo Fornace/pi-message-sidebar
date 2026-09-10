@@ -2,18 +2,21 @@ import {
   copyToClipboard,
   type ExtensionContext,
   type ReadonlyFooterDataProvider,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey } from "@earendil-works/pi-tui";
+import { ANIM_TICK_MS } from "./anim.ts";
 import type { CmuxContext } from "./cmux.ts";
 import { SIDEBAR_WIDTH } from "./constants.ts";
-import { readSessionGoal } from "./goal.ts";
 import type { FileEdit } from "./files.ts";
+import { readSessionGoal } from "./goal.ts";
 import { assertLinesFit } from "./layout.ts";
 import { MessagePanel } from "./messages.ts";
-import { renderFilesSection, renderGoalSection, renderRuntimeSection, renderSessionSection, ruleRow } from "./sections.ts";
-import { BG, FG_BRIGHT, FG_DIM, FG_FAINT, BOLD, RST, fillRow } from "./style.ts";
+import { resolvePalette } from "./palette.ts";
+import { renderGoalSection, renderRuntimeSection, renderSessionSection, ruleRow } from "./sections.ts";
+import { RST, fillRow } from "./style.ts";
 
 import type { UserMessage } from "./types.ts";
 
@@ -25,14 +28,17 @@ type SidebarOptions = {
   getFooterData: () => ReadonlyFooterDataProvider | null;
   getThinkingLevel: () => string;
   getCmuxContext: () => CmuxContext | null;
+  getTheme: () => Theme | null;
   getSummary: (messageId: string, text: string) => string;
   hasSummary: (messageId: string) => boolean;
+  isPending: (messageId: string) => boolean;
   summariesConfigured: () => boolean;
   getEditedFiles: () => FileEdit[];
+  getGitStatus: (path: string) => string | null;
   messages: UserMessage[];
 };
 
-type Layout = { goal: number; session: number; files: number; runtime: number; messages: number };
+type Layout = { goal: number; session: number; runtime: number; messages: number };
 
 const RULE_ROWS = 3;
 /** Rows a section cannot render without losing content it is required to show. */
@@ -63,7 +69,6 @@ function allocate(height: number, hasGoal: boolean, hasFiles: boolean): Layout |
 
   let goal = MANDATORY.goal(hasGoal);
   let session = MANDATORY.session;
-  let files = 0;
   let runtime = MANDATORY.runtime;
   let spare = height - minimumHeight(hasGoal);
 
@@ -76,14 +81,14 @@ function allocate(height: number, hasGoal: boolean, hasFiles: boolean): Layout |
   grow(1, (granted) => { session += granted; });        // branch · session id
   if (hasGoal) grow(4, (granted) => { goal += granted; }); // second title line and spacing
   if (hasFiles) {
-    // The section also costs its separating rule; it needs a heading plus a
-    // file row to be worth either, so a cramped rail leaves it out entirely.
-    const wanted = Math.min(3, spare - 1);
-    if (wanted >= 2) { files = wanted; spare -= wanted + 1; }
+    // FILES lives inside the session block: heading plus file rows. It needs
+    // both to be worth anything, so a cramped rail leaves it out entirely.
+    const granted = Math.min(3, spare);
+    if (granted >= 2) { session += granted; spare -= granted; }
   }
   grow(1, (granted) => { runtime += granted; });        // trailing breath under the runtime rows
 
-  return { goal, session, files, runtime, messages: MANDATORY.messages + spare };
+  return { goal, session, runtime, messages: MANDATORY.messages + spare };
 }
 
 export class SidebarComponent implements Component {
@@ -93,12 +98,14 @@ export class SidebarComponent implements Component {
   private restoreFocus: Component | null = null;
   private cachedSignature = "";
   private cachedLines: string[] = [];
+  private animTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly options: SidebarOptions) {
     this.panel = new MessagePanel(
       {
         getSummary: options.getSummary,
         hasSummary: options.hasSummary,
+        isPending: options.isPending,
         summariesConfigured: options.summariesConfigured,
         requestRefresh: () => this.refresh(),
       },
@@ -134,6 +141,30 @@ export class SidebarComponent implements Component {
   refresh(): void {
     this.version++;
     this.options.tui.requestRender();
+    this.ensureAnim();
+  }
+
+  /** Stops the animation tick; the extension calls this on session shutdown. */
+  stopAnimations(): void {
+    if (this.animTimer) clearInterval(this.animTimer);
+    this.animTimer = null;
+  }
+
+  /** The tick exists only while a dot pulses or a summary settles. */
+  private ensureAnim(): void {
+    const live = this.panel.needsAnim(Date.now());
+    if (live && !this.animTimer) {
+      this.animTimer = setInterval(() => {
+        if (!this.panel.needsAnim(Date.now())) {
+          this.stopAnimations();
+          this.refresh();
+          return;
+        }
+        this.version++;
+        this.options.tui.requestRender();
+      }, ANIM_TICK_MS);
+      (this.animTimer as { unref?: () => void }).unref?.();
+    }
   }
 
   handleInput(data: string): void {
@@ -155,7 +186,7 @@ export class SidebarComponent implements Component {
     const files = this.options.getEditedFiles();
     const layout = safeWidth < SIDEBAR_WIDTH ? null : allocate(targetHeight, hasGoal, files.length > 0);
     const result = layout
-      ? this.renderRail(safeWidth, targetHeight, layout)
+      ? this.renderRail(safeWidth, targetHeight, layout, files)
       : this.renderNotice(safeWidth, targetHeight, hasGoal);
     assertLinesFit(result, safeWidth, "sidebar");
     if (result.length !== targetHeight) {
@@ -163,6 +194,7 @@ export class SidebarComponent implements Component {
     }
     this.cachedSignature = signature;
     this.cachedLines = result;
+    this.ensureAnim();
     return result;
   }
 
@@ -173,31 +205,35 @@ export class SidebarComponent implements Component {
 
   // --- rail ---------------------------------------------------------------
 
-  private renderRail(_width: number, height: number, layout: Layout): string[] {
+  private renderRail(_width: number, height: number, layout: Layout, files: FileEdit[]): string[] {
     const ctx = this.options.ctx;
+    const palette = resolvePalette(this.options.getTheme());
+    const now = Date.now();
     const lines: string[] = [];
-    lines.push(...renderGoalSection(readSessionGoal(ctx), layout.goal));
-    lines.push(ruleRow());
-    lines.push(...renderSessionSection(ctx, this.options.getFooterData(), this.options.getCmuxContext(), layout.session));
-    if (layout.files > 0) {
-      lines.push(ruleRow());
-      lines.push(...renderFilesSection(this.options.getEditedFiles(), layout.files));
-    }
-    lines.push(ruleRow());
-    lines.push(...this.panel.renderSection(layout.messages, this.focused));
-    lines.push(ruleRow());
-    lines.push(...renderRuntimeSection(ctx, this.options.getFooterData(), this.options.getThinkingLevel(), layout.runtime));
+    lines.push(...renderGoalSection(readSessionGoal(ctx), layout.goal, palette));
+    lines.push(ruleRow(palette));
+    lines.push(...renderSessionSection(
+      ctx, this.options.getFooterData(), this.options.getCmuxContext(),
+      layout.session, palette, files, this.options.getGitStatus,
+    ));
+    lines.push(ruleRow(palette));
+    lines.push(...this.panel.renderSection(layout.messages, this.focused, palette, now));
+    lines.push(ruleRow(palette));
+    lines.push(...renderRuntimeSection(ctx, this.options.getFooterData(), this.options.getThinkingLevel(), layout.runtime, palette));
     return lines;
   }
 
   /** Bounded to the width actually offered, so a narrow slot never overflows its column. */
   private renderNotice(width: number, height: number, hasGoal: boolean): string[] {
+    const palette = resolvePalette(this.options.getTheme());
     const row = (text: string) =>
-      width <= 1 ? fillRow("", width, BG) : `${FG_FAINT}│${RST}${fillRow(` ${text}`, width - 1, BG)}`;
+      width <= 1
+        ? fillRow("", width, palette.bgBase)
+        : `${palette.rule}│${RST}${fillRow(` ${text}`, width - 1, palette.bgBase)}`;
     const lines: string[] = [];
     const push = (text: string) => { if (lines.length < height) lines.push(row(text)); };
-    push(`${BOLD}${FG_BRIGHT}Sidebar${RST}`);
-    push(`${FG_DIM}needs ${SIDEBAR_WIDTH}×${minimumHeight(hasGoal)}${RST}`);
+    push(`${palette.bold(`${palette.textNew}Sidebar${RST}`)}`);
+    push(`${palette.meta}needs ${SIDEBAR_WIDTH}×${minimumHeight(hasGoal)}${RST}`);
     while (lines.length < height) lines.push(row(""));
     return lines;
   }
@@ -208,6 +244,7 @@ export class SidebarComponent implements Component {
     const goal = readSessionGoal(this.options.ctx);
     const cmux = this.options.getCmuxContext();
     const files = this.options.getEditedFiles();
+    const theme = this.options.getTheme();
     return JSON.stringify({
       width,
       height,
@@ -219,6 +256,7 @@ export class SidebarComponent implements Component {
       goal: goal ? `${goal.goalId}:${goal.status}:${goal.usage.tokensUsed}:${goal.usage.activeSeconds}:${goal.updatedAt}` : null,
       cmux: cmux ? `${cmux.workspaceTitle}:${cmux.workspaceRef}:${cmux.surfaceRef}` : null,
       files: `${files.length}:${files[0]?.path ?? ""}`,
+      theme: theme?.name ?? null,
     });
   }
 

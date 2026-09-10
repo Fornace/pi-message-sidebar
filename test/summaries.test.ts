@@ -247,3 +247,28 @@ test("model output that echoes ANSI is sanitized before storage", async () => {
     temp.cleanup();
   }
 });
+
+test("PI_SIDEBAR_SUMMARY_MODEL overrides the summary route", async () => {
+  const temp = createTempDir();
+  process.env.PI_SUMMARIES_DIR = temp.path;
+  process.env.FORNACE_LLM_API_KEY = "test-key";
+  process.env.PI_SIDEBAR_SUMMARY_MODEL = "fornace-nano";
+
+  let seenModel = "";
+  const mockFetch: typeof fetch = async (_url, init) => {
+    seenModel = String(JSON.parse(String((init as RequestInit).body)).model);
+    return new Response(JSON.stringify({ choices: [{ message: { content: "Fast summary" } }] }),
+      { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const summaries = new SummaryService("sess-model", () => {}, mockFetch);
+    summaries.turnCompleted([userMessage("m1", "some prompt")]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(seenModel, "fornace-nano");
+    summaries.dispose();
+  } finally {
+    delete process.env.PI_SIDEBAR_SUMMARY_MODEL;
+    temp.cleanup();
+  }
+});

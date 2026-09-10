@@ -2,33 +2,22 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { CmuxContext } from "./cmux.ts";
 import type { FileEdit } from "./files.ts";
 import type { ThreadGoal } from "./goal.ts";
+import type { Palette } from "./palette.ts";
 import { computeUsage } from "./status-dock.ts";
 import {
-  BG,
-  BG_GOAL,
-  BOLD,
-  FG_BRIGHT,
-  FG_ERR,
-  FG_FAINT,
-  FG_INFO,
-  FG_PRIMARY,
-  FG_RULE,
-  FG_SECONDARY,
-  FG_STATUS_ACTIVE,
-  FG_STATUS_DONE,
-  FG_STATUS_WAIT,
   RST,
-  fillRow,
+  clip,
   ellipsizePath,
-  formatCwd,
   formatCost,
+  formatCwd,
   formatElapsed,
   formatTokens,
 } from "./style.ts";
+
 /**
  * Content width inside the rail: 42 columns minus the boundary and the two
  * pads. Every budget below measures against this, so a right-aligned element
@@ -41,57 +30,58 @@ export function railFill(width = RAIL_CONTENT): number {
   return width + 2;
 }
 
-export function railRow(content: string, bg: string, width = RAIL_CONTENT): string {
-  return `${FG_RULE}│${RST}${fillRow(` ${content}`, railFill(width), bg)}`;
+export function railRow(palette: Palette, content: string, bg: string, width = RAIL_CONTENT): string {
+  const injected = content.replace(/\x1b\[0m/g, `${RST}${bg}`);
+  const pad = " ".repeat(Math.max(0, width + 1 - visibleWidth(injected)));
+  return `${palette.rule}│${RST}${bg} ${injected}${pad}${RST}`;
 }
 
-export function ruleRow(width = RAIL_CONTENT): string {
-  return `${FG_RULE}│${RST}${fillRow(` ${FG_RULE}${"─".repeat(Math.max(0, width))}${RST}`, railFill(width), BG)}`;
+export function ruleRow(palette: Palette, width = RAIL_CONTENT): string {
+  return railRow(palette, `${palette.rule}${"─".repeat(Math.max(0, width))}${RST}`, palette.bgBase, width);
 }
 
-function labelRow(label: string, bg: string, right?: string): string {
-  if (right === undefined) return railRow(`${FG_SECONDARY}${label}${RST}`, bg);
-  const leftWidth = visibleWidth(label);
-  const gap = Math.max(1, RAIL_CONTENT - leftWidth - visibleWidth(right));
-  return railRow(`${FG_SECONDARY}${label}${RST}${" ".repeat(gap)}${right}`, bg);
+function labelRow(palette: Palette, label: string, bg: string, right?: string): string {
+  if (right === undefined) return railRow(palette, `${palette.label}${label}${RST}`, bg);
+  const gap = Math.max(1, RAIL_CONTENT - visibleWidth(label) - visibleWidth(right));
+  return railRow(palette, `${palette.label}${label}${RST}${" ".repeat(gap)}${right}`, bg);
 }
 
 // --- goal -----------------------------------------------------------------
 
-function goalStatus(goal: ThreadGoal): { icon: string; color: string; label: string } {
+function goalStatus(palette: Palette, goal: ThreadGoal): { icon: string; color: string; label: string } {
   switch (goal.status) {
-    case "active": return { icon: "●", color: FG_STATUS_ACTIVE, label: "ACTIVE" };
-    case "complete": return { icon: "✓", color: FG_STATUS_DONE, label: "COMPLETE" };
-    case "paused": return { icon: "○", color: FG_STATUS_WAIT, label: "PAUSED" };
-    case "budgetLimited": return { icon: "▲", color: FG_ERR, label: "BUDGET" };
+    case "active": return { icon: "●", color: palette.badgeAdded, label: "ACTIVE" };
+    case "complete": return { icon: "✓", color: palette.badgeAdded, label: "COMPLETE" };
+    case "paused": return { icon: "○", color: palette.badgeModified, label: "PAUSED" };
+    case "budgetLimited": return { icon: "▲", color: palette.badgeDeleted, label: "BUDGET" };
   }
 }
 
 /**
- * The goal is the primary element: bold bright title, status color, explicit
- * budget and elapsed metadata, on the strongest background in the rail.
+ * The goal is the primary element: bold title, status color, explicit budget
+ * and elapsed metadata, on the raised step of the background ladder.
  */
-export function renderGoalSection(goal: ThreadGoal | null, rows: number, width = RAIL_CONTENT): string[] {
+export function renderGoalSection(goal: ThreadGoal | null, rows: number, palette: Palette, width = RAIL_CONTENT): string[] {
   if (rows <= 0) return [];
   const lines: string[] = [];
   const push = (line: string) => { if (lines.length < rows) lines.push(line); };
-  const bg = BG_GOAL;
+  const bg = palette.bgRaised;
 
   if (!goal) {
-    push(railRow("", bg, width));
-    push(railRow(`${BOLD}${FG_SECONDARY}GOAL${RST}`, bg, width));
-    push(railRow(`${FG_FAINT}No active goal · /goal <objective>${RST}`, bg, width));
-    while (lines.length < rows) push(railRow("", bg, width));
+    push(railRow(palette, "", bg, width));
+    push(railRow(palette, `${palette.label}GOAL${RST}`, bg, width));
+    push(railRow(palette, `${palette.meta}No active goal · /goal <objective>${RST}`, bg, width));
+    while (lines.length < rows) push(railRow(palette, "", bg, width));
     return lines;
   }
 
-  const status = goalStatus(goal);
-  const statusText = `${status.color}${BOLD}${status.icon} ${status.label}${RST}`;
-  const elapsedText = `${FG_BRIGHT}${formatElapsed(goal.usage.activeSeconds)} elapsed${RST}`;
+  const status = goalStatus(palette, goal);
+  const statusText = `${status.color}${palette.bold(`${status.icon} ${status.label}`)}${RST}`;
+  const elapsedText = `${palette.textMid}${formatElapsed(goal.usage.activeSeconds)} elapsed${RST}`;
   const overBudget = goal.tokenBudget !== null && goal.usage.tokensUsed > goal.tokenBudget;
   const budgetText = goal.tokenBudget
-    ? `${overBudget ? FG_ERR : FG_BRIGHT}${formatTokens(goal.usage.tokensUsed)} / ${formatTokens(goal.tokenBudget)} tokens used${RST}`
-    : `${FG_BRIGHT}${formatTokens(goal.usage.tokensUsed)} tokens used${RST} ${FG_FAINT}· unlimited${RST}`;
+    ? `${overBudget ? palette.badgeDeleted : palette.textMid}${formatTokens(goal.usage.tokensUsed)} / ${formatTokens(goal.tokenBudget)} tokens used${RST}`
+    : `${palette.textMid}${formatTokens(goal.usage.tokensUsed)} tokens used${RST} ${palette.meta}· unlimited${RST}`;
 
   const titleWrap = Math.max(1, width);
   const titleLines: string[] = [];
@@ -115,82 +105,91 @@ export function renderGoalSection(goal: ThreadGoal | null, rows: number, width =
   }
   if (titleLines.length === 2 && wordIndex < words.length) {
     const rest = words.slice(wordIndex).join(" ");
-    const combined = `${titleLines[1]} ${rest}`;
-    titleLines[1] = truncateToWidth(combined, titleWrap, "…");
+    titleLines[1] = clip(`${titleLines[1]} ${rest}`, titleWrap);
   }
 
   // Spacious layout: blank, label, blank, 2 title rows, blank, status, budget, blank.
-  push(railRow("", bg, width));
-  push(railRow(`${BOLD}${FG_SECONDARY}GOAL${RST}`, bg, width));
-  if (rows >= 8) push(railRow("", bg, width));
-  push(railRow(`${BOLD}${FG_BRIGHT}${truncateToWidth(titleLines[0] ?? "—", titleWrap, "…")}${RST}`, bg, width));
-  if (rows >= 7) push(railRow(`${BOLD}${FG_BRIGHT}${truncateToWidth(titleLines[1] ?? "", titleWrap, "…")}${RST}`, bg, width));
-  if (rows >= 9) push(railRow("", bg, width));
+  push(railRow(palette, "", bg, width));
+  push(railRow(palette, `${palette.label}GOAL${RST}`, bg, width));
+  if (rows >= 8) push(railRow(palette, "", bg, width));
+  push(railRow(palette, `${palette.bold(`${palette.textNew}${clip(titleLines[0] ?? "—", titleWrap)}${RST}`)}`, bg, width));
+  if (rows >= 7) push(railRow(palette, `${palette.bold(`${palette.textNew}${clip(titleLines[1] ?? "", titleWrap)}${RST}`)}`, bg, width));
+  if (rows >= 9) push(railRow(palette, "", bg, width));
   // Status left, elapsed right on one row.
   const elapsedCells = visibleWidth(`${formatElapsed(goal.usage.activeSeconds)} elapsed`);
   const gap = Math.max(1, width - visibleWidth(`${status.icon} ${status.label}`) - elapsedCells);
-  push(railRow(`${statusText}${" ".repeat(gap)}${elapsedText}`, bg, width));
-  push(railRow(budgetText, bg, width));
-  while (lines.length < rows) push(railRow("", bg, width));
+  push(railRow(palette, `${statusText}${" ".repeat(gap)}${elapsedText}`, bg, width));
+  push(railRow(palette, budgetText, bg, width));
+  while (lines.length < rows) push(railRow(palette, "", bg, width));
   return lines;
 }
 
-// --- session --------------------------------------------------------------
+// --- session and files ------------------------------------------------------
 
+function fileBadge(palette: Palette, letter: string | null): string {
+  switch (letter) {
+    case "M": return `${palette.badgeModified}M${RST}`;
+    case "A": return `${palette.badgeAdded}A${RST}`;
+    case "U": return `${palette.badgeAdded}U${RST}`;
+    case "D": return `${palette.badgeDeleted}D${RST}`;
+    case "R": return `${palette.badgeRenamed}R${RST}`;
+    default: return `${palette.meta}·${RST}`;
+  }
+}
+
+/**
+ * Session identity plus the write footprint in one block: surface and
+ * workspace, cwd, branch and session id, then a FILES subsection whose
+ * heading counts distinct files and whose rows carry the git letter
+ * convention (M/A/U/D/R) in front of front-trimmed paths.
+ */
 export function renderSessionSection(
   ctx: ExtensionContext,
   footerData: ReadonlyFooterDataProvider | null,
   cmux: CmuxContext | null,
   rows: number,
+  palette: Palette,
+  files: FileEdit[],
+  statusFor: (path: string) => string | null,
   width = RAIL_CONTENT,
 ): string[] {
   if (rows <= 0) return [];
   const lines: string[] = [];
   const push = (line: string) => { if (lines.length < rows) lines.push(line); };
+  const bg = palette.bgBase;
 
-  push(labelRow("SESSION", BG));
+  push(labelRow(palette, "SESSION", bg));
   const surface = cmux?.surfaceRef ?? "surface n/a";
   const workspace = cmux?.workspaceTitle ?? cmux?.workspaceRef ?? "";
   const identityRow = workspace
-    ? `${FG_INFO}${surface}${RST} ${FG_FAINT}·${RST} ${FG_PRIMARY}${truncateToWidth(workspace, Math.max(1, width - visibleWidth(surface) - 3), "…")}${RST}`
-    : `${FG_INFO}${surface}${RST}`;
-  push(railRow(identityRow, BG, width));
-  push(railRow(`${FG_PRIMARY}${ellipsizePath(formatCwd(ctx.sessionManager.getCwd()), width)}${RST}`, BG, width));
+    ? `${palette.surface}${surface}${RST} ${palette.meta}·${RST} ${palette.textMid}${clip(workspace, Math.max(1, width - visibleWidth(surface) - 3))}${RST}`
+    : `${palette.surface}${surface}${RST}`;
+  push(railRow(palette, identityRow, bg, width));
+  push(railRow(palette, `${palette.textMid}${ellipsizePath(formatCwd(ctx.sessionManager.getCwd()), width)}${RST}`, bg, width));
   if (rows >= 4) {
     const branch = footerData?.getGitBranch() ?? null;
     const sessionId = ctx.sessionManager.getSessionId().replace(/-/g, "").slice(0, 8);
-    const sessionPart = `${FG_FAINT}session${RST} ${FG_PRIMARY}${sessionId}${RST}`;
+    const sessionPart = `${palette.meta}session${RST} ${palette.textMid}${sessionId}${RST}`;
     if (branch) {
       const branchBudget = Math.max(1, width - visibleWidth("branch ") - 3 - visibleWidth(`session ${sessionId}`));
-      push(railRow(`${FG_FAINT}branch${RST} ${FG_PRIMARY}${truncateToWidth(branch, branchBudget, "…")}${RST} ${FG_FAINT}·${RST} ${sessionPart}`, BG, width));
+      push(railRow(palette, `${palette.meta}branch${RST} ${palette.textMid}${clip(branch, branchBudget)}${RST} ${palette.meta}·${RST} ${sessionPart}`, bg, width));
     } else {
-      push(railRow(sessionPart, BG, width));
+      push(railRow(palette, sessionPart, bg, width));
     }
   }
-  while (lines.length < rows) push(railRow("", BG, width));
-  return lines;
-}
-
-// --- files ----------------------------------------------------------------
-
-/**
- * The session's write footprint: heading with the distinct-file count, then
- * the most recently touched files, latest first, with a repeat count when a
- * file was written more than once. Zero rows when nothing was edited.
- */
-export function renderFilesSection(files: FileEdit[], rows: number, width = RAIL_CONTENT): string[] {
-  if (rows <= 0 || files.length === 0) return [];
-  const lines: string[] = [];
-  const push = (line: string) => { if (lines.length < rows) lines.push(line); };
-
-  const noun = files.length === 1 ? "file" : "files";
-  push(labelRow("FILES", BG, `${FG_FAINT}${files.length} ${noun}${RST}`));
-  for (const file of files) {
-    if (lines.length >= rows) break;
-    const repeats = file.edits > 1 ? ` ${FG_FAINT}×${file.edits}${RST}` : "";
-    push(railRow(`${FG_PRIMARY}${ellipsizePath(file.path, Math.max(1, width - visibleWidth(repeats)))}${RST}${repeats}`, BG, width));
+  // The FILES subsection needs its heading plus at least one file row.
+  if (files.length > 0 && rows - lines.length >= 2) {
+    const noun = files.length === 1 ? "file" : "files";
+    push(labelRow(palette, "FILES", bg, `${palette.meta}${files.length} ${noun}${RST}`));
+    for (const file of files) {
+      if (lines.length >= rows) break;
+      const badge = fileBadge(palette, statusFor(file.path));
+      const repeats = file.edits > 1 ? `${palette.meta} ×${file.edits}${RST}` : "";
+      const pathBudget = width - 2 - visibleWidth(repeats);
+      push(railRow(palette, `${badge} ${palette.textMid}${ellipsizePath(file.path, Math.max(1, pathBudget))}${RST}${repeats}`, bg, width));
+    }
   }
-  while (lines.length < rows) push(railRow("", BG, width));
+  while (lines.length < rows) push(railRow(palette, "", bg, width));
   return lines;
 }
 
@@ -201,21 +200,23 @@ export function renderRuntimeSection(
   footerData: ReadonlyFooterDataProvider | null,
   thinkingLevel: string,
   rows: number,
+  palette: Palette,
   width = RAIL_CONTENT,
 ): string[] {
   if (rows <= 0) return [];
   const lines: string[] = [];
   const push = (line: string) => { if (lines.length < rows) lines.push(line); };
+  const bg = palette.bgBase;
 
   const model = ctx.model;
   if (model) {
     const provider = footerData && footerData.getAvailableProviderCount() > 1 ? `${model.provider}/` : "";
-    push(railRow(`${FG_SECONDARY}${truncateToWidth(`${provider}${model.id}`, width, "…")}${RST}`, BG, width));
+    push(railRow(palette, `${palette.textMid}${clip(`${provider}${model.id}`, width)}${RST}`, bg, width));
   }
   const usage = computeUsage(ctx);
   const percent = usage.contextPercent === null ? "?" : `${Math.round(usage.contextPercent)}%`;
-  const thinking = model?.reasoning ? `${thinkingLevel} ${FG_FAINT}·${RST} ` : "";
-  push(railRow(`${FG_SECONDARY}${thinking}ctx ${percent} ${FG_FAINT}·${RST} ${formatCost(usage.cost)}${RST}`, BG, width));
-  while (lines.length < rows) push(railRow("", BG, width));
+  const thinking = model?.reasoning ? `${palette.meta}${thinkingLevel} ·${RST} ` : "";
+  push(railRow(palette, `${thinking}${palette.meta}ctx${RST} ${palette.textMid}${percent}${RST} ${palette.meta}·${RST} ${palette.textMid}${formatCost(usage.cost)}${RST}`, bg, width));
+  while (lines.length < rows) push(railRow(palette, "", bg, width));
   return lines;
 }

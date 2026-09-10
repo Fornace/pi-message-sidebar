@@ -5,7 +5,11 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 ## Features
 
 - Fixed 42-column panel on the right, stacked GOAL / SESSION / FILES / MESSAGES / runtime
-- AI message summaries (`fornace-flash` through the Fornace gateway): one plain sentence per prompt, cached per session on disk, with a deterministic preview as the placeholder until the model answers; an unconfigured gateway shows a setup hint under the MESSAGES heading
+- AI message summaries (`fornace-flash` through the Fornace gateway, `PI_SIDEBAR_SUMMARY_MODEL` to override): one plain sentence per prompt, cached per session on disk, with a deterministic preview as the placeholder until the model answers; an unconfigured gateway shows a setup hint under the MESSAGES heading
+- Theme-harmonized colors: semantic pi theme tokens for accents, badges, and selection, universal grays for content text, and a three-step background ladder; light terminals invert the ladder
+- Age-faded summaries with pi-recap motion: a pulsing dot while a summary is in flight, an accent settle sweep when it lands
+- Git-style change badges (M/A/U/D/R) on the FILES rows, from a throttled `git status` provider
+- Message detail header reports the message size in chars and wrapped lines
 - Structured two-row message slots: selection marker, ordinal, timestamp, and the summary wrapped across two lines
 - Ellipsis rows that count the hidden messages whenever the history outgrows the viewport
 - FILES section summarizing the session's edited files: distinct-file count in the heading, most recently written paths below, repeat counts included
@@ -68,6 +72,9 @@ The message body is one contiguous chronological viewport. New messages remain s
 - `src/sections.ts` renders the goal, session, files, and runtime sections into fixed row budgets.
 - `src/summaries.ts` generates and caches one-line AI summaries off the render path.
 - `src/files.ts` collects the session's edited files from write tool calls.
+- `src/git-status.ts` maps the worktree status onto the shared M/A/U/D/R letter convention.
+- `src/palette.ts` resolves theme tokens, universal content grays, and the background ladder per render.
+- `src/anim.ts` owns the pulse and settle timing; the tick runs only while something moves.
 - `src/status-dock.ts` supplies context-usage and status validation helpers.
 - `src/goal.ts` reconstructs the active pi-codex-goal from session entries.
 - `src/cmux.ts` resolves the cmux workspace title and surface ref once per session.

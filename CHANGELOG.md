@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.9.0
+
+> Theme-harmonized rail: universal content colors, a three-step background ladder, git-style file badges, age fade, and pi-recap motion.
+
+- Colors now resolve from the active pi theme (accent, muted, dim, warning, diff and border tokens, `selectedBg` for the selection) with theme-agnostic universal grays for content text, the way pi-recap keeps recap bodies readable under any theme. The old hardcoded 256-color slabs are gone: backgrounds are a three-step ladder (base, raised for goal and detail, sunken for the hint strip) instead of contrasting blocks.
+- Fixed a real leak: bare `\x1b[0m` resets inside composed rows (from pi-tui's truncation ellipsis and segment joins) painted the terminal's default foreground mid-row. All truncation now happens on plain text before coloring, and a regression test asserts no row leaks the default foreground.
+- FILES rows carry the git letter convention shared by git, VS Code, and GitHub: M modified, A added, U untracked, D deleted, R renamed, colored through theme diff/warning tokens, fed by a throttled `git status --porcelain` provider that is symlink-safe and silent outside repositories.
+- Message summaries fade with age like pi-recap recaps: newest bright, recent normal, older muted, deterministic previews dimmer still.
+- Motion in the pi-recap spirit, ticking at 90 ms only while something moves: a truecolor pulsing dot (sine lerp, 256-color fallback) marks messages whose summary is still in flight, and a landing summary sweeps accent then bold accent over 360 ms before settling into its age color.
+- The message detail header reports the message size: `#N HH:MM` left, `1.4k chars · 12 lines` right.
+- Light terminals get an inverted background ladder and content grays via COLORFGBG, matching pi-recap's detection.
+- `PI_SIDEBAR_SUMMARY_MODEL` overrides the summary route; a gateway microbench (fornace-flash 739 ms TTFB vs 1.1-3.1 s for the alternates) keeps `fornace-flash` as the default.
+
 ## 1.8.0
 
 > AI message summaries, a structured two-row message grid with hidden-count ellipsis rows, and an edited-files section.

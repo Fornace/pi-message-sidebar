@@ -1,22 +1,9 @@
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { RAIL_CONTENT, railFill, railRow } from "./sections.ts";
-import {
-  BG,
-  BG_DETAIL,
-  BG_HINT,
-  BG_SEL,
-  FG_ACC,
-  FG_BRIGHT,
-  FG_DIM,
-  FG_EXP,
-  FG_FAINT,
-  FG_PRIMARY,
-  FG_SECONDARY,
-  RST,
-  fillRow,
-  formatTime,
-  wrapText,
-} from "./style.ts";
+import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import { DOT_GLYPH, isSettling, pulse, settlePhase } from "./anim.ts";
+import type { Palette } from "./palette.ts";
+import { fgRgb, rgbLerp } from "./palette.ts";
+import { RAIL_CONTENT, railRow } from "./sections.ts";
+import { RST, clip, formatCount, formatTime, wrapText } from "./style.ts";
 import type { UserMessage } from "./types.ts";
 
 export type { UserMessage };
@@ -24,8 +11,10 @@ export type { UserMessage };
 type MessagePanelOptions = {
   /** Display summary for a message: model summary when present, preview otherwise. */
   getSummary: (messageId: string, text: string) => string;
-  /** Whether the model has written this message's summary yet (dims the preview). */
+  /** Whether the model has written this message's summary yet. */
   hasSummary: (messageId: string) => boolean;
+  /** Whether a summary request for this message is still in flight. */
+  isPending: (messageId: string) => boolean;
   /** Whether the summary gateway is configured at all (shows the setup hint). */
   summariesConfigured: () => boolean;
   requestRefresh: () => void;
@@ -37,6 +26,8 @@ const TEXT_CELLS = RAIL_CONTENT - META_CELLS;
 /** One message always occupies a two-row slot: summary line plus its wrap. */
 const ROWS_PER_MESSAGE = 2;
 const SETUP_HINT = "AI summaries need FORNACE_LLM_API_KEY";
+/** Messages this far from the newest read as current; older ones fade. */
+const FRESH_WINDOW = 4;
 
 export function detailCapacity(rows: number, wrappedCount: number): { textCapacity: number; hasIndicator: boolean; maxScroll: number } {
   const available = Math.max(0, rows - 1);
@@ -64,6 +55,8 @@ export class MessagePanel {
   private followTail = true;
   private viewportStartId: string | null = null;
   private wrapCache: { id: string; lines: string[] } | null = null;
+  private readonly seenSummary = new Map<string, boolean>();
+  private readonly landedAt = new Map<string, number>();
 
   constructor(
     private readonly options: MessagePanelOptions,
@@ -125,24 +118,37 @@ export class MessagePanel {
     this.options.requestRefresh();
   }
 
+  /** True while a pulsing dot or a settle sweep needs the animation tick. */
+  needsAnim(now: number): boolean {
+    for (const message of this.messages) {
+      if (this.options.isPending(message.id)) return true;
+    }
+    for (const [id, at] of this.landedAt) {
+      if (isSettling(now, at)) return true;
+      if (now - at > 5000) this.landedAt.delete(id);
+    }
+    return false;
+  }
+
   /** Renders exactly `rows` lines: heading, optional setup hint, viewport, hint strip. */
-  renderSection(rows: number, focused: boolean): string[] {
+  renderSection(rows: number, focused: boolean, palette: Palette, now: number): string[] {
     const total = this.messages.length;
     const detailIndex = this.detailId ? this.indexForId(this.detailId) : -1;
     const position = detailIndex >= 0 ? detailIndex + 1 : this.selectedIndex() + 1;
     const heading = this.headingRow(
+      palette,
       this.detailId ? "MESSAGE" : "MESSAGES",
       total > 0 || this.detailId ? `${position}/${total}` : `0/${total}`,
     );
 
     if (this.detailId) {
       const detailRows = Math.max(1, rows - 2);
-      const detail = this.renderDetail(this.detailId, detailRows);
+      const detail = this.renderDetail(this.detailId, detailRows, palette);
       // Only offer scrolling when there is something below the fold.
       const message = this.messages[this.indexForId(this.detailId)];
       const scrollable = message !== undefined
         && detailCapacity(detailRows, this.wrappedDetail(message).length).hasIndicator;
-      return [heading, ...detail, this.hintRow(scrollable ? "Esc back · ↑↓ scroll" : "Esc back")];
+      return [heading, ...detail, this.hintRow(palette, scrollable ? "Esc back · ↑↓ scroll" : "Esc back")];
     }
 
     // The setup hint replaces the spacer row under the heading; a message
@@ -153,72 +159,106 @@ export class MessagePanel {
     const viewportRows = Math.max(2, rows - consumed);
     const sections = [
       heading,
-      ...(showSetupHint ? [railRow(`${FG_FAINT}${SETUP_HINT}${RST}`, BG)] : []),
-      ...(spacer ? [railRow("", BG)] : []),
-      ...this.renderViewport(viewportRows, focused),
-      this.hintRow(focused ? "↑↓ select · Enter open · c copy" : "Ctrl+Shift+H focus"),
+      ...(showSetupHint ? [railRow(palette, `${palette.meta}${SETUP_HINT}${RST}`, palette.bgBase)] : []),
+      ...(spacer ? [railRow(palette, "", palette.bgBase)] : []),
+      ...this.renderViewport(viewportRows, focused, palette, now),
+      this.hintRow(palette, focused ? "↑↓ select · Enter open · c copy" : "Ctrl+Shift+H focus"),
     ];
-    while (sections.length < rows) sections.push(railRow("", BG));
+    while (sections.length < rows) sections.push(railRow(palette, "", palette.bgBase));
     return sections.slice(0, rows);
   }
 
   // --- list rendering ------------------------------------------------------
 
-  private headingRow(label: string, right: string): string {
-    const leftWidth = visibleWidth(label);
-    const gap = Math.max(1, RAIL_CONTENT - leftWidth - visibleWidth(right));
-    return railRow(`${FG_SECONDARY}${label}${RST}${" ".repeat(gap)}${FG_FAINT}${right}${RST}`, BG);
+  private headingRow(palette: Palette, label: string, right: string): string {
+    const gap = Math.max(1, RAIL_CONTENT - visibleWidth(label) - visibleWidth(right));
+    return railRow(palette, `${palette.label}${label}${RST}${" ".repeat(gap)}${palette.meta}${right}${RST}`, palette.bgBase);
   }
 
-  private hintRow(text: string): string {
-    return railRow(`${FG_DIM}${text}${RST}`, BG_HINT);
+  private hintRow(palette: Palette, text: string): string {
+    return railRow(palette, `${palette.meta}${text}${RST}`, palette.bgSunken);
   }
 
   /** Always returns exactly `rows` lines: ellipsis rows, message pairs, padding. */
-  private renderViewport(rows: number, focused: boolean): string[] {
+  private renderViewport(rows: number, focused: boolean, palette: Palette, now: number): string[] {
     if (this.messages.length === 0) {
-      const empty = [railRow(`${FG_DIM}No messages yet${RST}`, BG)];
-      while (empty.length < rows) empty.push(railRow("", BG));
+      const empty = [railRow(palette, `${palette.preview}No messages yet${RST}`, palette.bgBase)];
+      while (empty.length < rows) empty.push(railRow(palette, "", palette.bgBase));
       return empty;
     }
 
     const window = this.resolveWindow(rows);
     const pairs: string[] = [];
     for (let index = window.start; index < window.end; index++) {
-      pairs.push(...this.messageRows(index, focused));
+      pairs.push(...this.messageRows(index, focused, palette, now));
     }
     // A message pair outranks an ellipsis row when both cannot fit.
     const topCount = window.start > 0 && 1 + pairs.length <= rows;
     const bottomCount = window.end < this.messages.length && (topCount ? 2 : 1) + pairs.length <= rows;
     const lines = [
-      ...(topCount ? [this.countRow(window.start, "earlier")] : []),
+      ...(topCount ? [this.countRow(palette, window.start, "earlier")] : []),
       ...pairs,
-      ...(bottomCount ? [this.countRow(this.messages.length - window.end, "later")] : []),
+      ...(bottomCount ? [this.countRow(palette, this.messages.length - window.end, "later")] : []),
     ];
-    while (lines.length < rows) lines.push(railRow("", BG));
+    while (lines.length < rows) lines.push(railRow(palette, "", palette.bgBase));
     return lines.slice(0, rows);
   }
 
-  private countRow(count: number, direction: "earlier" | "later"): string {
-    return railRow(`${FG_FAINT}… ${count} ${direction}${RST}`, BG);
+  private countRow(palette: Palette, count: number, direction: "earlier" | "later"): string {
+    return railRow(palette, `${palette.meta}… ${count} ${direction}${RST}`, palette.bgBase);
   }
 
-  private messageRows(index: number, focused: boolean): string[] {
+  private messageRows(index: number, focused: boolean, palette: Palette, now: number): string[] {
     const message = this.messages[index]!;
     const selected = message.id === this.selectedId;
-    const marker = selected && focused ? `${FG_ACC}›${RST}` : " ";
-    const ordinal = truncateToWidth(String(message.index), 3, "…").padStart(3);
+    const marker = this.markerCell(message, selected, focused, palette, now);
+    const ordinal = clip(String(message.index), 3).padStart(3);
     const time = formatTime(message.timestamp).padEnd(5);
-    const meta = `${FG_FAINT}${ordinal} ${time} ${RST}`;
+    const meta = `${palette.meta}${ordinal} ${time} ${RST}`;
     const text = this.summaryLines(message);
-    const color = selected ? FG_BRIGHT : this.options.hasSummary(message.id) ? FG_PRIMARY : FG_DIM;
-    const background = selected ? BG_SEL : BG;
+    const color = this.textColor(message, index, selected, palette, now);
+    const background = selected ? palette.bgSelected : palette.bgBase;
     const first = `${marker}${meta}${color}${text[0]}${RST}`;
     const second = `${" ".repeat(META_CELLS)}${color}${text[1]}${RST}`;
     return [
-      `${FG_FAINT}│${RST}${fillRow(` ${first}`, railFill(), background)}`,
-      `${FG_FAINT}│${RST}${fillRow(` ${second}`, railFill(), background)}`,
+      railRow(palette, first, background),
+      railRow(palette, second, background),
     ];
+  }
+
+  /** Selection marker, or a pulsing dot while the summary is still in flight. */
+  private markerCell(message: UserMessage, selected: boolean, focused: boolean, palette: Palette, now: number): string {
+    if (this.options.isPending(message.id)) {
+      if (palette.truecolor && palette.dotDim && palette.dotPeak) {
+        return `${fgRgb(rgbLerp(palette.dotDim, palette.dotPeak, pulse(now, 0)))}${DOT_GLYPH}${RST}`;
+      }
+      const step = Math.round(pulse(now, 0) * (palette.dotFallback.length - 1));
+      return `${palette.dotFallback[step] ?? palette.meta}${DOT_GLYPH}${RST}`;
+    }
+    if (selected && focused) return palette.accent;
+    return " ";
+  }
+
+  /** Age fade like pi-recap: newest bright, recent normal, older muted; a
+   *  landing summary sweeps accent then bold accent before settling. */
+  private textColor(message: UserMessage, index: number, selected: boolean, palette: Palette, now: number): string {
+    const has = this.options.hasSummary(message.id);
+    const was = this.seenSummary.get(message.id);
+    if (has && was === false) this.landedAt.set(message.id, now);
+    this.seenSummary.set(message.id, has);
+
+    const landed = this.landedAt.get(message.id);
+    if (has && landed !== undefined) {
+      const phase = settlePhase(now, landed);
+      if (phase === 1) return palette.accent;
+      if (phase === 2) return palette.bold(palette.accent);
+    }
+    if (selected) return palette.textNew;
+    if (!has) return palette.preview;
+    const distance = this.messages.length - 1 - index;
+    if (distance === 0) return palette.textNew;
+    if (distance <= FRESH_WINDOW) return palette.textMid;
+    return palette.textOld;
   }
 
   /** The summary wrapped into the two text cells of a message slot. */
@@ -226,7 +266,7 @@ export class MessagePanel {
     const wrapped = wrapText(this.options.getSummary(message.id, message.text), TEXT_CELLS);
     if (wrapped.length <= 1) return [wrapped[0] ?? "", ""];
     const second = wrapped.length > 2
-      ? truncateToWidth(wrapped.slice(1).join(" "), TEXT_CELLS, "…")
+      ? clip(wrapped.slice(1).join(" "), TEXT_CELLS)
       : wrapped[1]!;
     return [wrapped[0]!, second];
   }
@@ -277,28 +317,31 @@ export class MessagePanel {
 
   // --- detail view ---------------------------------------------------------
 
-  private renderDetail(messageId: string, rows: number): string[] {
+  private renderDetail(messageId: string, rows: number, palette: Palette): string[] {
     const message = this.messages[this.indexForId(messageId)];
     if (!message) {
       // The message left the branch under an open detail. Fill the section:
       // returning a single row would surface as a fatal height mismatch.
-      const lines = [railRow(`${FG_DIM}Message unavailable${RST}`, BG)];
-      while (lines.length < rows) lines.push(railRow("", BG));
+      const lines = [railRow(palette, `${palette.preview}Message unavailable${RST}`, palette.bgBase)];
+      while (lines.length < rows) lines.push(railRow(palette, "", palette.bgBase));
       return lines;
     }
     this.lastDetailRows = rows;
-    const header = railRow(`${FG_FAINT}#${message.index} ${formatTime(message.timestamp)}${RST}`, BG);
     const wrapped = this.wrappedDetail(message);
+    const size = `${palette.meta}${formatCount(message.text.length)} chars · ${wrapped.length} lines${RST}`;
+    const head = `#${message.index} ${formatTime(message.timestamp)}`;
+    const gap = Math.max(1, RAIL_CONTENT - visibleWidth(head) - visibleWidth(`${formatCount(message.text.length)} chars · ${wrapped.length} lines`));
+    const header = railRow(palette, `${palette.meta}${head}${RST}${" ".repeat(gap)}${size}`, palette.bgRaised);
     const { textCapacity, hasIndicator, maxScroll } = detailCapacity(rows, wrapped.length);
     this.detailScroll = Math.max(0, Math.min(this.detailScroll, maxScroll));
     const visible = wrapped.slice(this.detailScroll, this.detailScroll + textCapacity);
-    const lines = [header, ...visible.map((line) => railRow(`${FG_EXP}${line}${RST}`, BG_DETAIL))];
+    const lines = [header, ...visible.map((line) => railRow(palette, `${palette.textMid}${line}${RST}`, palette.bgRaised))];
     if (hasIndicator) {
       const first = visible.length > 0 ? this.detailScroll + 1 : 0;
       const last = this.detailScroll + visible.length;
-      lines.push(railRow(`${FG_DIM}${first}-${last} of ${wrapped.length} · ↑↓ scroll${RST}`, BG_DETAIL));
+      lines.push(railRow(palette, `${palette.meta}${first}-${last} of ${wrapped.length} · ↑↓ scroll${RST}`, palette.bgRaised));
     }
-    while (lines.length < rows) lines.push(railRow("", BG_DETAIL));
+    while (lines.length < rows) lines.push(railRow(palette, "", palette.bgRaised));
     return lines;
   }
 
@@ -335,3 +378,4 @@ export class MessagePanel {
     return id ? this.messages.findIndex((message) => message.id === id) : -1;
   }
 }
+

@@ -73,6 +73,8 @@ function makeSidebar(options: {
   hasSummary?: (id: string) => boolean;
   summariesConfigured?: boolean;
   editedFiles?: string[];
+  pending?: string[];
+  gitStatus?: Record<string, string>;
 }) {
   const rows = options.rows ?? 30;
   return new SidebarComponent({
@@ -91,6 +93,9 @@ function makeSidebar(options: {
     hasSummary: options.hasSummary ?? (() => true),
     summariesConfigured: () => options.summariesConfigured ?? true,
     getEditedFiles: () => (options.editedFiles ?? []).map((path, index) => ({ path, edits: index === 0 ? 3 : 1 })),
+    getTheme: () => null,
+    isPending: (id: string) => (options.pending ?? []).includes(id),
+    getGitStatus: (path: string) => options.gitStatus?.[path] ?? null,
   });
 }
 
@@ -205,15 +210,19 @@ test("the files section summarizes edited files between session and messages", (
     messages: sampleMessages(3),
     rows: 34,
     editedFiles: ["/very/deep/path/repo/src/sidebar-component.ts", "/repo/README.md", "/repo/CHANGELOG.md"],
+    gitStatus: {
+      "/very/deep/path/repo/src/sidebar-component.ts": "M",
+      "/repo/README.md": "A",
+    },
   });
 
   const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
   const filesIdx = clean.findIndex((l) => /FILES\s+3 files/.test(l));
   assert.ok(filesIdx >= 0, "FILES heading with the distinct-file count must appear");
 
-  // Latest first, deep paths front-truncated, repeat count on the most-edited file
-  assert.match(clean[filesIdx + 1]!, /…\/path\/repo\/src\/sidebar-component\.ts ×3\s*$/);
-  assert.match(clean[filesIdx + 2]!, /\/repo\/README\.md/);
+  // Git letter convention in front of front-trimmed paths, repeat count last
+  assert.match(clean[filesIdx + 1]!, /M …\/repo\/src\/sidebar-component\.ts ×3\s*$/);
+  assert.match(clean[filesIdx + 2]!, /A \/repo\/README\.md\s*$/);
 
   // Section order: SESSION before FILES before MESSAGES
   const sessionIdx = clean.findIndex((l) => l.includes("SESSION"));
@@ -421,4 +430,86 @@ test("the detail hint offers scrolling only when the message overflows", () => {
   const longHint = long.render(SIDEBAR_WIDTH).map(stripAnsi).find((l) => l.includes("Esc back"));
   assert.ok(longHint);
   assert.match(longHint, /↑↓ scroll/);
+});
+
+test("a pending summary shows a pulsing dot in the marker cell", () => {
+  const sidebar = makeSidebar({ messages: sampleMessages(2), rows: 25, pending: ["id-1"] });
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const pendingRow = clean.find((l) => l.includes("unique-message-1"));
+  assert.ok(pendingRow);
+  assert.ok(pendingRow!.includes("●"), "a pending message must show the dot glyph");
+  const settledRow = clean.find((l) => l.includes("unique-message-0"));
+  assert.ok(settledRow && !settledRow.includes("●"), "a settled message must not show the dot");
+});
+
+test("a landing summary sweeps the accent color before settling", async () => {
+  let has = false;
+  const sidebar = makeSidebar({ messages: sampleMessages(1), rows: 25, hasSummary: () => has });
+  sidebar.render(SIDEBAR_WIDTH); // registers the pre-summary state
+  has = true;
+  sidebar.invalidate();
+  const sweeping = sidebar.render(SIDEBAR_WIDTH).join("");
+  assert.ok(sweeping.includes("\x1b[38;5;75m"), "a fresh summary must flash the accent");
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  sidebar.invalidate();
+  const settled = sidebar.render(SIDEBAR_WIDTH).join("");
+  assert.ok(!settled.includes("\x1b[38;5;75m"), "a settled summary must rest in its age color");
+});
+
+test("the detail header reports the message size in chars and lines", () => {
+  const text = "word ".repeat(100).trim();
+  const sidebar = makeSidebar({
+    messages: [{ id: "a", index: 1, timestamp: new Date(2026, 8, 10, 2, 16).toISOString(), text }],
+    rows: 25,
+  });
+  sidebar.setFocused(true);
+  sidebar.handleInput("\r");
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const header = clean.find((l) => l.includes("#1"));
+  assert.ok(header);
+  assert.match(header!, /#1 \d\d:\d\d\s+499 chars · \d+ lines/);
+});
+
+test("summaries fade with age and previews read dimmer still", () => {
+  const faded = makeSidebar({ messages: sampleMessages(8), rows: 40 });
+  const raw = faded.render(SIDEBAR_WIDTH);
+  const clean = raw.map(stripAnsi);
+  const rowFor = (n: number) => raw[clean.findIndex((l) => l.includes(`unique-message-${n}`))]!;
+  assert.ok(rowFor(7).includes("\x1b[38;2;232;232;232m"), "newest summary reads bright");
+  assert.ok(rowFor(4).includes("\x1b[38;2;208;208;208m"), "recent summaries read normal");
+  assert.ok(rowFor(0).includes("\x1b[38;5;246m"), "old summaries read muted");
+
+  const previews = makeSidebar({ messages: sampleMessages(2), rows: 25, hasSummary: () => false });
+  const previewRaw = previews.render(SIDEBAR_WIDTH).join("");
+  assert.ok(previewRaw.includes("\x1b[38;5;243m"), "previews read dimmer than summaries");
+});
+
+test("no rail row leaks the terminal default foreground mid-row", () => {
+  // A bare reset followed by visible text paints the user's theme default
+  // color into the middle of a row; every reset must be followed by a new
+  // SGR sequence, the row's background padding, or the end of the row.
+  const history = sampleMessages(30);
+  const sidebar = makeSidebar({
+    messages: history,
+    rows: 40,
+    goal: GOAL,
+    editedFiles: ["/very/deep/path/repo/src/sidebar-component.ts"],
+    gitStatus: { "/very/deep/path/repo/src/sidebar-component.ts": "M" },
+  });
+  const variants = [sidebar.render(SIDEBAR_WIDTH)];
+  sidebar.setFocused(true);
+  variants.push(sidebar.render(SIDEBAR_WIDTH));
+  sidebar.handleInput("\r");
+  variants.push(sidebar.render(SIDEBAR_WIDTH));
+
+  for (const lines of variants) {
+    for (const [index, line] of lines.entries()) {
+      const leaks = [...line.matchAll(/\x1b\[0m/g)].some((match) => {
+        const after = line.slice(match.index! + 4);
+        return after.length > 0 && !/^\s*$/.test(after) && !after.startsWith("\x1b[");
+      });
+      assert.equal(leaks, false, `row ${index} leaks the default foreground: ${JSON.stringify(line)}`);
+    }
+    sidebar.invalidate();
+  }
 });

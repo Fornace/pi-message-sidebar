@@ -18,6 +18,8 @@ type SummaryOutcome =
   | { status: "unusable" };
 
 const PROMPT_VERSION = 2;
+/** Default summary model; PI_SIDEBAR_SUMMARY_MODEL overrides per machine. */
+const DEFAULT_SUMMARY_MODEL = "fornace-flash";
 /** Widest stored summary: the rail wraps one summary across two 28-cell rows. */
 const STORED_MAX_CELLS = 56;
 const DISPLAY_MAX_CELLS = 56;
@@ -162,6 +164,12 @@ export class SummaryService {
     return this.cache.has(messageId);
   }
 
+  /** True while a request for this message is queued or in flight. */
+  isPending(messageId: string): boolean {
+    if (this.inFlight.has(messageId) || this.pendingWork.has(messageId)) return true;
+    return this.queue.some((entry) => entry.message.id === messageId);
+  }
+
   dispose(): void {
     this.disposed = true;
     this.currentAbort?.abort();
@@ -255,7 +263,7 @@ export class SummaryService {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: "fornace-flash",
+          model: process.env.PI_SIDEBAR_SUMMARY_MODEL ?? DEFAULT_SUMMARY_MODEL,
           max_tokens: 48,
           temperature: 0,
           messages: [
