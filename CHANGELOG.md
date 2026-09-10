@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.11.0
+
+> Plain-text summaries and an honest copy key: what you copy from the rail is finally clean.
+
+- Stored summaries and fallback previews no longer contain ANSI resets: pi-tui's `truncateToWidth` wraps its ellipsis in `\x1b[0m` resets, and that helper was applied to plain text, so every clipped summary persisted and rendered with escape bytes (visible as garbage when copied, and resetting rail row colors mid-row). Both paths now strip ANSI after truncation; existing polluted summary caches self-heal on next session load.
+- The focused rail's `c` key now copies the selected prompt's full text, matching the `[c] copy` hint. Previously `c` always copied the session file path even while the messages panel was focused and its hint advertised message copy. The unfocused rail keeps `c` as copy-session-path.
+
 ## 1.10.0
 
 > Embedded section headers, usage meters, and a tighter rail: every section now spends one row where it used to spend two.

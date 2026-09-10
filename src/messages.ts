@@ -73,6 +73,11 @@ export class MessagePanel {
 
   getSelectedMessageId(): string | null { return this.selectedId; }
   isFollowingTail(): boolean { return this.followTail; }
+
+  /** Full prompt text of the selected message, for the focused rail's copy key. */
+  selectedMessageText(): string | null {
+    return this.messages.find((message) => message.id === this.selectedId)?.text ?? null;
+  }
   isExpanded(messageId: string): boolean { return this.detailId === messageId; }
   isDetailOpen(): boolean { return this.detailId !== null; }
 

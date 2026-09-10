@@ -43,18 +43,25 @@ export function isGatewayConfigured(): boolean {
   return Boolean(process.env.FORNACE_LLM_API_KEY);
 }
 
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+/** Truncate plain text: pi-tui's truncateToWidth wraps its ellipsis in ANSI resets, so strip them again. */
+function plainTruncate(text: string, maxCells: number): string {
+  return truncateToWidth(text, maxCells, "…").replace(ANSI_PATTERN, "");
+}
+
 function sanitize(raw: string): string | null {
   const oneLine = raw
     // Model output can echo ANSI from pasted terminal content: strip whole
     // sequences first, then orphaned CSI remnants left after control stripping.
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, " ")
+    .replace(ANSI_PATTERN, " ")
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\[[0-9;?]{0,12}m/g, " ")
     .replace(/^["'`\s]+|["'`\s]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!oneLine) return null;
-  const clipped = truncateToWidth(oneLine, STORED_MAX_CELLS, "…");
+  const clipped = plainTruncate(oneLine, STORED_MAX_CELLS);
   return visibleWidth(clipped) === 0 ? null : clipped;
 }
 
@@ -72,7 +79,7 @@ export function fallbackSummary(text: string): string {
     if (cells >= DISPLAY_MAX_CELLS) break;
   }
   const summary = picked.join(" ");
-  return summary ? truncateToWidth(summary, STORED_MAX_CELLS, "…") : "Untitled prompt";
+  return summary ? plainTruncate(summary, STORED_MAX_CELLS) : "Untitled prompt";
 }
 
 function summariesDir(): string {

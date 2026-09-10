@@ -248,6 +248,34 @@ test("model output that echoes ANSI is sanitized before storage", async () => {
   }
 });
 
+test("a clipped summary stays plain text: the ellipsis must not carry ANSI resets", async () => {
+  const temp = createTempDir();
+  process.env.PI_SUMMARIES_DIR = temp.path;
+  process.env.FORNACE_LLM_API_KEY = "test-key";
+
+  const longAnswer = "Refactor the gateway input observation cache and reconcile the sticky routing fingerprint across deployments";
+  const mockFetch: typeof fetch = async () => {
+    return new Response(JSON.stringify({ choices: [{ message: { content: longAnswer } }] }),
+      { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const summaries = new SummaryService("sess-clip", () => {}, mockFetch);
+    summaries.turnCompleted([userMessage("m1", "long prompt")]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const summary = summaries.get("m1", "long prompt");
+    assert.ok(summary.length <= 57, `clipped summary must be short (${summary.length} chars)`);
+    assert.ok(!summary.includes("\u001b"), "truncateToWidth-injected resets must not survive storage");
+    assert.ok(summary.endsWith("…"), `clipped summary ends with the ellipsis: ${summary}`);
+    const fallback = fallbackSummary("word ".repeat(200));
+    assert.ok(!fallback.includes("\u001b"), "fallback preview must stay plain text");
+    summaries.dispose();
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("PI_SIDEBAR_SUMMARY_MODEL overrides the summary route", async () => {
   const temp = createTempDir();
   process.env.PI_SUMMARIES_DIR = temp.path;

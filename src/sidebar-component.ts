@@ -172,7 +172,10 @@ export class SidebarComponent implements Component {
       if (this.panel.isDetailOpen()) { this.panel.closeDetail(); return; }
       return this.setFocused(false);
     }
-    if (!this.panel.isDetailOpen() && matchesKey(data, "c")) { void this.copySessionPath(); return; }
+    if (!this.panel.isDetailOpen() && matchesKey(data, "c")) {
+      void this.copyRailTarget();
+      return;
+    }
     this.panel.handleInput(data);
   }
 
@@ -255,6 +258,21 @@ export class SidebarComponent implements Component {
       files: `${files.length}:${files[0]?.path ?? ""}`,
       theme: theme?.name ?? null,
     });
+  }
+
+  /** Focused with a selection copies that prompt; the unfocused rail copies the session identity. */
+  private async copyRailTarget(): Promise<void> {
+    const message = this.focused ? this.panel.selectedMessageText() : null;
+    if (message !== null) {
+      try {
+        await copyToClipboard(message);
+        this.options.ctx.ui.notify("Copied prompt", "info");
+      } catch {
+        this.options.ctx.ui.notify("Copy failed", "warning");
+      }
+      return;
+    }
+    await this.copySessionPath();
   }
 
   private async copySessionPath(): Promise<void> {
