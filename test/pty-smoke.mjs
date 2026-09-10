@@ -45,11 +45,11 @@ child.onExit(({ exitCode }) => {
     console.error(clean.slice(-5000));
     process.exit(1);
   }
-  if (columns >= 123 && !clean.includes("Messages")) {
+  if (columns >= 123 && !clean.includes("MESSAGES")) {
     console.error("Wide smoke test never rendered the sidebar");
     process.exit(1);
   }
-  if (columns < 123 && clean.includes("Messages")) {
+  if (columns < 123 && clean.includes("MESSAGES")) {
     console.error("Narrow smoke test rendered the sidebar over the main pane");
     process.exit(1);
   }
@@ -61,7 +61,7 @@ child.onExit(({ exitCode }) => {
     console.error(`Populated smoke test never rendered ${JSON.stringify(expectedMessage)}`);
     process.exit(1);
   }
-  if (expectedSelection && !clean.includes(`Selected ${expectedSelection}`)) {
+  if (expectedSelection && !clean.includes(expectedSelection)) {
     console.error(`PTY navigation never selected ${JSON.stringify(expectedSelection)}`);
     process.exit(1);
   }
@@ -75,7 +75,9 @@ if (columns >= 123) {
 setTimeout(() => child.write("/sidebar\r"), 1700);
 setTimeout(() => child.write("\x1b[A"), 2100);
 setTimeout(() => child.write("\r"), 2250);
+// First Escape closes the message detail, second unfocuses the rail.
 setTimeout(() => child.write("\x1b"), 2450);
+setTimeout(() => child.write("\x1b"), 2600);
 setTimeout(() => child.write("\x04"), 2900);
 setTimeout(() => {
   if (finished) return;

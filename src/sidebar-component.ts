@@ -10,21 +10,26 @@ import type { CmuxContext } from "./cmux.ts";
 import { SIDEBAR_WIDTH } from "./constants.ts";
 import { readSessionGoal } from "./goal.ts";
 import { assertLinesFit } from "./layout.ts";
-import { renderStatusDock } from "./status-dock.ts";
+import {
+  RAIL_CONTENT,
+  railFill,
+  renderGoalSection,
+  renderRuntimeSection,
+  renderSessionSection,
+  railRow,
+  ruleRow,
+} from "./sections.ts";
 import {
   BG,
-  BG_HDR,
   BG_SEL,
   BOLD,
-  DIM,
   FG_ACC,
   FG_BRIGHT,
   FG_DIM,
   FG_EXP,
   FG_FAINT,
-  FG_MID,
-  FG_NORM,
-  FG_TIME,
+  FG_PRIMARY,
+  FG_SECONDARY,
   RST,
   fillRow,
   formatTime,
@@ -39,12 +44,62 @@ type SidebarOptions = {
   getFooterData: () => ReadonlyFooterDataProvider | null;
   getThinkingLevel: () => string;
   getCmuxContext: () => CmuxContext | null;
+  getTitle: (messageId: string, text: string) => string;
   messages: UserMessage[];
 };
+
+type Layout = { goal: number; session: number; runtime: number; messages: number };
+
+const RULE_ROWS = 3;
+/** Rows a section cannot render without losing content it is required to show. */
+const MANDATORY = {
+  /** blank + GOAL + title + status + budget; the no-goal state is GOAL + guidance. */
+  goal: (hasGoal: boolean) => (hasGoal ? 5 : 3),
+  /** label + surface/workspace + cwd. */
+  session: 3,
+  /** heading + one message + hint. */
+  messages: 3,
+  /** model route + ctx/cost. */
+  runtime: 2,
+} as const;
+
+/** Smallest terminal that can hold every mandatory row; below it the rail shows a notice. */
+export function minimumHeight(hasGoal: boolean): number {
+  return MANDATORY.goal(hasGoal) + MANDATORY.session + MANDATORY.messages + MANDATORY.runtime + RULE_ROWS;
+}
+
+/**
+ * Mandatory rows first, then optional rows in priority order, then every
+ * remaining row to the message viewport. Returns null when the mandatory
+ * budget does not fit, so the caller renders a notice instead of silently
+ * slicing content away.
+ */
+function allocate(height: number, hasGoal: boolean): Layout | null {
+  if (height < minimumHeight(hasGoal)) return null;
+
+  let goal = MANDATORY.goal(hasGoal);
+  let session = MANDATORY.session;
+  let runtime = MANDATORY.runtime;
+  let spare = height - minimumHeight(hasGoal);
+
+  const grow = (rows: number, take: (granted: number) => void) => {
+    const granted = Math.min(rows, spare);
+    if (granted <= 0) return;
+    take(granted);
+    spare -= granted;
+  };
+  grow(1, (granted) => { session += granted; });        // branch · session id
+  if (hasGoal) grow(4, (granted) => { goal += granted; }); // second title line and spacing
+  grow(1, (granted) => { runtime += granted; });        // trailing breath under the runtime rows
+
+  return { goal, session, runtime, messages: MANDATORY.messages + spare };
+}
 
 export class SidebarComponent implements Component {
   private focused = false;
   private selectedId: string | null;
+  private detailId: string | null = null;
+  private detailScroll = 0;
   private readonly expandedIds = new Set<string>();
   private followTail = true;
   private messages: UserMessage[];
@@ -62,7 +117,8 @@ export class SidebarComponent implements Component {
   isFocused(): boolean { return this.focused; }
   getSelectedMessageId(): string | null { return this.selectedId; }
   isFollowingTail(): boolean { return this.followTail; }
-  isExpanded(messageId: string): boolean { return this.expandedIds.has(messageId); }
+  isExpanded(messageId: string): boolean { return this.expandedIds.has(messageId) || this.detailId === messageId; }
+  isDetailOpen(): boolean { return this.detailId !== null; }
 
   setFocused(focused: boolean): void {
     if (this.focused === focused) return;
@@ -72,6 +128,7 @@ export class SidebarComponent implements Component {
       this.options.tui.setFocus(this);
     } else {
       this.focused = false;
+      this.detailId = null;
       if ((this.options.tui as any).getFocusedComponent?.() === this) this.options.tui.setFocus(this.restoreFocus);
       this.restoreFocus = null;
     }
@@ -84,6 +141,7 @@ export class SidebarComponent implements Component {
     this.messages = messages;
     const ids = new Set(messages.map((message) => message.id));
     for (const id of this.expandedIds) if (!ids.has(id)) this.expandedIds.delete(id);
+    if (this.detailId && !ids.has(this.detailId)) { this.detailId = null; this.detailScroll = 0; }
     this.viewportStartId = previousStartId && ids.has(previousStartId) ? previousStartId : null;
 
     if (this.followTail || !previousId || !ids.has(previousId)) {
@@ -102,7 +160,11 @@ export class SidebarComponent implements Component {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, "escape")) return this.setFocused(false);
+    if (matchesKey(data, "escape")) {
+      if (this.detailId) { this.detailId = null; this.detailScroll = 0; this.refresh(); return; }
+      return this.setFocused(false);
+    }
+    if (this.detailId) return this.handleDetailInput(data);
     if (matchesKey(data, "c")) { void this.copySessionPath(); return; }
     const current = this.selectedIndex();
     let target: number | null = null;
@@ -113,10 +175,7 @@ export class SidebarComponent implements Component {
     else if (matchesKey(data, "home")) target = 0;
     else if (matchesKey(data, "end")) target = Math.max(0, this.messages.length - 1);
     else if (matchesKey(data, "return") || matchesKey(data, "enter") || data === " ") {
-      if (!this.selectedId) return;
-      if (this.expandedIds.has(this.selectedId)) this.expandedIds.delete(this.selectedId);
-      else this.expandedIds.add(this.selectedId);
-      this.refresh();
+      if (this.selectedId) { this.detailId = this.selectedId; this.detailScroll = 0; this.refresh(); }
       return;
     } else return;
 
@@ -133,25 +192,15 @@ export class SidebarComponent implements Component {
     const signature = this.signature(safeWidth, targetHeight);
     if (signature === this.cachedSignature) return this.cachedLines;
 
-    const fullHeader = this.renderHeader(safeWidth);
-    const headerRows = this.messages.length > 0 && targetHeight === 1 ? 0 : 1;
-    const header = fullHeader.slice(0, Math.min(headerRows, targetHeight));
-    const available = Math.max(0, targetHeight - header.length);
-    // At tiny heights, keep one chronological message row before allocating dock chrome.
-    const messageReserve = this.messages.length > 0 && available > 0 ? 1 : 0;
-    const dock = renderStatusDock(
-      safeWidth,
-      this.options.ctx,
-      this.options.getFooterData(),
-      this.options.getThinkingLevel(),
-      this.focused,
-      this.options.getCmuxContext,
-      Math.min(5, Math.max(0, available - messageReserve)),
-    );
-    const bodyHeight = Math.max(0, targetHeight - header.length - dock.length);
-    const result = [...header, ...this.renderBody(safeWidth, bodyHeight), ...dock];
+    const hasGoal = readSessionGoal(this.options.ctx) !== null;
+    const layout = safeWidth < SIDEBAR_WIDTH ? null : allocate(targetHeight, hasGoal);
+    const result = layout
+      ? this.renderRail(safeWidth, targetHeight, layout)
+      : this.renderNotice(safeWidth, targetHeight, hasGoal);
     assertLinesFit(result, safeWidth, "sidebar");
-    if (result.length !== targetHeight) throw new Error(`sidebar height mismatch (${result.length} != ${targetHeight})`);
+    if (result.length !== targetHeight) {
+      throw new Error(`sidebar height mismatch (${result.length} != ${targetHeight})`);
+    }
     this.cachedSignature = signature;
     this.cachedLines = result;
     return result;
@@ -162,107 +211,138 @@ export class SidebarComponent implements Component {
     this.cachedLines = [];
   }
 
-  private renderHeader(width: number): string[] {
-    const position = this.selectedIndex() + 1;
-    const count = this.messages.length;
-    const selected = this.messages[this.selectedIndex()];
-    const detail = selected ? ` ${FG_FAINT}·${RST} ${FG_DIM}#${selected.index} ${formatTime(selected.timestamp)}${RST}` : "";
-    return [
-      fillRow(` ${BOLD}${FG_BRIGHT}Messages${RST} ${FG_FAINT}${count > 0 ? `${position}/${count}` : "0"}${RST}${detail}`, width, BG_HDR),
-    ];
+  // --- rail ---------------------------------------------------------------
+
+  private renderRail(_width: number, height: number, layout: Layout): string[] {
+    const ctx = this.options.ctx;
+    const lines: string[] = [];
+    lines.push(...renderGoalSection(readSessionGoal(ctx), layout.goal));
+    lines.push(ruleRow());
+    lines.push(...renderSessionSection(ctx, this.options.getFooterData(), this.options.getCmuxContext(), layout.session));
+    lines.push(ruleRow());
+    lines.push(...this.renderMessages(layout.messages));
+    lines.push(ruleRow());
+    lines.push(...renderRuntimeSection(ctx, this.options.getFooterData(), this.options.getThinkingLevel(), layout.runtime));
+    return lines.slice(0, height);
   }
 
-  private renderBody(width: number, height: number): string[] {
-    if (height === 0) return [];
-    if (this.messages.length === 0) return this.padBottom([fillRow(` ${FG_DIM}No messages yet${RST}`, width, BG)], height, width);
+  /** Bounded to the width actually offered, so a narrow slot never overflows its column. */
+  private renderNotice(width: number, height: number, hasGoal: boolean): string[] {
+    const row = (text: string) =>
+      width <= 1 ? fillRow("", width, BG) : `${FG_FAINT}│${RST}${fillRow(` ${text}`, width - 1, BG)}`;
+    const lines = [
+      row(`${BOLD}${FG_BRIGHT}Sidebar${RST}`),
+      row(`${FG_DIM}needs ${SIDEBAR_WIDTH}×${minimumHeight(hasGoal)}${RST}`),
+    ];
+    while (lines.length < height) lines.push(row(""));
+    return lines.slice(0, height);
+  }
+
+  // --- messages -----------------------------------------------------------
+
+  private renderMessages(rows: number): string[] {
+    const total = this.messages.length;
+    const position = this.selectedIndex() + 1;
+    const heading = this.detailId
+      ? this.headingRow("MESSAGE", `${position}/${total}`)
+      : this.headingRow("MESSAGES", total > 0 ? `${position}/${total}` : "0/0");
+
+    if (this.detailId) {
+      const detail = this.renderDetail(this.detailId, Math.max(1, rows - 2));
+      return [heading, ...detail, this.hintRow("Esc back · ↑↓ scroll")].slice(0, rows);
+    }
+
+    const blank = rows >= 4;
+    const viewportRows = Math.max(1, rows - (blank ? 3 : 2));
+    const viewport = this.renderViewport(viewportRows);
+    const sections = [heading, ...(blank ? [railRow("", BG)] : []), ...viewport, this.hintRow(this.focused ? "↑↓ select · Enter open · c copy" : "Ctrl+Shift+H focus")];
+    while (sections.length < rows) sections.splice(sections.length - 1, 0, railRow("", BG));
+    return sections.slice(0, rows);
+  }
+
+  private headingRow(label: string, right: string): string {
+    const leftWidth = visibleWidth(label);
+    const gap = Math.max(1, RAIL_CONTENT - 2 - leftWidth - visibleWidth(right));
+    return railRow(`${FG_SECONDARY}${label}${RST}${" ".repeat(gap)}${FG_FAINT}${right}${RST}`, BG);
+  }
+
+  private hintRow(text: string): string {
+    return railRow(`${FG_DIM}${text}${RST}`, "\x1b[48;5;233m");
+  }
+
+  private renderViewport(rows: number): string[] {
+    if (this.messages.length === 0) return [railRow(`${FG_DIM}No messages yet${RST}`, BG)];
 
     const selected = this.selectedIndex();
-    let start = this.followTail ? this.tailStart(width, height) : this.startForSelection(width, height, selected);
+    let start = this.followTail
+      ? this.tailStart(rows)
+      : Math.min(this.startForSelection(rows, selected), Math.max(0, this.messages.length - rows));
     const preserved = this.indexForId(this.viewportStartId);
-    if (!this.followTail && preserved >= 0 && selected >= preserved && this.rangeFitsSelection(width, height, preserved, selected)) start = preserved;
+    if (!this.followTail && preserved >= 0 && selected >= preserved && this.rangeFits(preserved, selected, rows)) start = preserved;
+    start = Math.max(0, Math.min(start, Math.max(0, this.messages.length - rows)));
 
     const lines: string[] = [];
-    for (let index = start; index < this.messages.length && lines.length < height; index++) {
-      const remaining = height - lines.length;
-      lines.push(...this.renderMessage(index, width, remaining));
+    for (let index = start; index < this.messages.length && lines.length < rows; index++) {
+      lines.push(this.renderMessageRow(index));
     }
     this.viewportStartId = this.messages[start]?.id ?? null;
-    return this.padBottom(lines.slice(0, height), height, width);
+    while (lines.length < rows) lines.push(railRow("", BG));
+    return lines;
   }
 
-  private tailStart(width: number, height: number): number {
-    let start = this.messages.length - 1;
-    let rows = this.messageRowCount(start, width, height);
-    while (start > 0) {
-      const next = this.messageRowCount(start - 1, width, height);
-      if (rows + next > height) break;
-      rows += next;
-      start--;
-    }
-    return start;
-  }
-
-  private startForSelection(width: number, height: number, selected: number): number {
-    let start = selected;
-    let rows = this.messageRowCount(selected, width, height);
-    while (start > 0) {
-      const next = this.messageRowCount(start - 1, width, height);
-      if (rows + next > height) break;
-      rows += next;
-      start--;
-    }
-    return start;
-  }
-
-  private rangeFitsSelection(width: number, height: number, start: number, selected: number): boolean {
-    let rows = 0;
-    for (let index = start; index <= selected; index++) {
-      rows += this.messageRowCount(index, width, height);
-      if (rows > height) return false;
-    }
-    return true;
-  }
-
-  private messageRowCount(index: number, width: number, maxRows: number): number {
-    return this.renderMessage(index, width, maxRows).length;
-  }
-
-  private padBottom(lines: string[], height: number, width: number): string[] {
-    const padding = Array.from({ length: Math.max(0, height - lines.length) }, () => fillRow(" ", width, BG));
-    return [...lines, ...padding];
-  }
-
-  private renderMessage(index: number, width: number, maxRows = Number.MAX_SAFE_INTEGER): string[] {
+  private renderMessageRow(index: number): string {
     const message = this.messages[index]!;
     const selected = message.id === this.selectedId;
-    const background = selected ? BG_SEL : BG;
-    const arrow = selected && this.focused ? `${FG_ACC}›${RST}` : " ";
-    if (!this.expandedIds.has(message.id)) {
-      // Collapsed preview: up to two wrapped lines so real prompts stay readable.
-      const prefix = ` ${arrow} `;
-      const textWidth = Math.max(1, width - visibleWidth(prefix));
-      const wrapped = wrapText(message.text, textWidth);
-      const rows = Math.max(1, Math.min(2, maxRows));
-      const shown = wrapped.slice(0, rows);
-      if (wrapped.length > shown.length && shown.length > 0) {
-        const overflow = shown[shown.length - 1]!;
-        shown[shown.length - 1] = truncateToWidth(overflow, Math.max(1, textWidth - 1), "") + "…";
-      }
-      return shown.map((line, position) =>
-        fillRow(`${position === 0 ? prefix : "   "}${selected ? FG_BRIGHT : FG_NORM}${line}${RST}`, width, background),
-      );
-    }
+    const title = this.options.getTitle(message.id, message.text);
+    const prefix = selected && this.focused ? `${FG_ACC}›${RST} ` : "  ";
+    const titleWidth = RAIL_CONTENT - 3;
+    const body = `${selected ? FG_BRIGHT : FG_PRIMARY}${truncateToWidth(title, titleWidth, "…")}${RST}`;
+    return `${FG_FAINT}│${RST}${fillRow(` ${prefix}${body}`, railFill(), selected ? BG_SEL : BG)}`;
+  }
 
-    const number = `${FG_FAINT}#${message.index}${RST}`;
-    const time = `${FG_TIME}${formatTime(message.timestamp)}${RST}`;
-    const lines = [fillRow(` ${arrow} ${number} ${time}`, width, background)];
-    const wrapped = wrapText(message.text, Math.max(1, width - 4));
-    const contentRows = Math.max(0, maxRows - 1);
-    for (const line of wrapped.slice(0, contentRows)) lines.push(fillRow(`   ${FG_EXP}${line}${RST}`, width, background));
-    if (wrapped.length > contentRows && lines.length === maxRows) {
-      lines[lines.length - 1] = fillRow(`   ${FG_DIM}${DIM}…+${wrapped.length - contentRows + 1} lines${RST}`, width, background);
+  private renderDetail(messageId: string, rows: number): string[] {
+    const message = this.messages[this.indexForId(messageId)];
+    if (!message) return [railRow(`${FG_DIM}Message unavailable${RST}`, BG)];
+    const header = railRow(`${FG_FAINT}#${message.index} ${formatTime(message.timestamp)}${RST}`, BG);
+    const wrapped = wrapText(message.text, RAIL_CONTENT - 3);
+    const maxScroll = Math.max(0, wrapped.length - rows + 1);
+    this.detailScroll = Math.max(0, Math.min(this.detailScroll, maxScroll));
+    const visible = wrapped.slice(this.detailScroll, this.detailScroll + rows - 1);
+    const lines = [header, ...visible.map((line) => railRow(`${FG_EXP}${line}${RST}`, "\x1b[48;5;235m"))];
+    if (wrapped.length > visible.length) {
+      lines.push(railRow(`${FG_DIM}…${wrapped.length - this.detailScroll - visible.length} more lines · ↑↓ scroll${RST}`, "\x1b[48;5;235m"));
     }
-    return lines;
+    while (lines.length < rows) lines.push(railRow("", "\x1b[48;5;235m"));
+    return lines.slice(0, rows);
+  }
+
+  private handleDetailInput(data: string): void {
+    const message = this.messages[this.indexForId(this.detailId)];
+    if (!message) { this.detailId = null; return; }
+    const wrapped = wrapText(message.text, RAIL_CONTENT - 3);
+    const maxScroll = Math.max(0, wrapped.length - 1);
+    if (matchesKey(data, "up") || matchesKey(data, "pageUp")) {
+      this.detailScroll = Math.max(0, this.detailScroll - (matchesKey(data, "pageUp") ? 10 : 1));
+    } else if (matchesKey(data, "down") || matchesKey(data, "pageDown")) {
+      this.detailScroll = Math.min(maxScroll, this.detailScroll + (matchesKey(data, "pageDown") ? 10 : 1));
+    } else return;
+    this.refresh();
+  }
+
+  // --- viewport math --------------------------------------------------------
+
+  private tailStart(rows: number): number {
+    let start = this.messages.length - 1;
+    while (start > 0 && this.messages.length - start < rows) start--;
+    return start;
+  }
+
+  private startForSelection(rows: number, selected: number): number {
+    return Math.max(0, Math.min(selected, this.messages.length - rows));
+  }
+
+  private rangeFits(start: number, selected: number, rows: number): boolean {
+    return selected - start < rows;
   }
 
   private selectedIndex(): number {

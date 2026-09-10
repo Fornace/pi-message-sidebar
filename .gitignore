@@ -22,3 +22,6 @@ yarn-error.log*
 dist/
 build/
 *.tsbuildinfo
+
+# Scratch (test/debug scripts, probes, captures)
+_tmp/

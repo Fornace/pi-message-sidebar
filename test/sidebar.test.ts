@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { SIDEBAR_WIDTH } from "../src/constants.ts";
-import { SidebarComponent, type UserMessage } from "../src/sidebar-component.ts";
+import { SidebarComponent, minimumHeight, type UserMessage } from "../src/sidebar-component.ts";
+import { fallbackTitle } from "../src/titles.ts";
 
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
@@ -47,6 +48,7 @@ function makeSidebar(messages: UserMessage[], rows = 24) {
     getThinkingLevel: () => "high",
     getCmuxContext: () => null,
     getFooterData: () => null,
+    getTitle: (_id, text) => fallbackTitle(text),
   });
 }
 
@@ -89,6 +91,7 @@ test("sidebar lines fit at every supported component width", () => {
       getAvailableProviderCount: () => 4,
       onBranchChange: () => () => {},
     }),
+    getTitle: (_id, text) => fallbackTitle(text),
   });
 
   for (const width of [1, 8, 16, 24, 35, SIDEBAR_WIDTH]) {
@@ -99,15 +102,17 @@ test("sidebar lines fit at every supported component width", () => {
   }
 });
 
-test("collapsed rows spend width on message text and keep metadata off body rows", () => {
-  const sidebar = makeSidebar(messages(1), 12);
+test("message rows spend their width on the title and keep position in the heading", () => {
+  const sidebar = makeSidebar(messages(1), 24);
   const lines = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
   const bodyRow = lines.find((line) => line.includes("unique-message-0"));
   assert.ok(bodyRow);
   assert.match(bodyRow, /unique-message-0 with enough text/);
-  // Position and selected timestamp live in the single header row, not on body rows.
-  assert.match(lines[0]!, /Messages 1\/1/);
-  assert.match(lines[0]!, /#1 12:00/);
+  // Position lives in the MESSAGES heading, never on a body row.
+  const heading = lines.find((line) => line.includes("MESSAGES"));
+  assert.ok(heading);
+  assert.match(heading, /MESSAGES\s+1\/1/);
+  assert.ok(!bodyRow.includes("1/1"));
 });
 
 test("expanded messages stay bounded", () => {
@@ -155,7 +160,7 @@ test("follow-tail selects new messages until the user browses away", () => {
 
 test("viewport is one contiguous chronological range without newest teleporting", () => {
   const history = messages(30);
-  const sidebar = makeSidebar(history, 15);
+  const sidebar = makeSidebar(history, 24);
   sidebar.setFocused(true);
   sidebar.handleInput("\x1b[H");
   const clean = stripAnsi(sidebar.render(SIDEBAR_WIDTH).join("\n"));
@@ -165,24 +170,51 @@ test("viewport is one contiguous chronological range without newest teleporting"
   assert.doesNotMatch(clean, /hidden/);
 });
 
-test("short histories top-align and use blank rows only below messages", () => {
-  const sidebar = makeSidebar(messages(2), 15);
+test("short histories top-align under the heading and pad below the last message", () => {
+  const sidebar = makeSidebar(messages(2), 24);
   const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const heading = clean.findIndex((line) => line.includes("MESSAGES"));
   const first = clean.findIndex((line) => line.includes("unique-message-0"));
   const second = clean.findIndex((line) => line.includes("unique-message-1"));
-  // Single header row, first message underneath, two-line preview wraps before the next.
-  assert.equal(first, 1);
-  assert.equal(second, 3);
-  assert.match(clean[2]!, /chronological row/);
+  assert.ok(heading >= 0);
+  // Chronological, contiguous, and immediately below the heading block.
+  assert.equal(second, first + 1);
+  assert.ok(first > heading && first - heading <= 2);
+  // Padding sits below the last message, never between the heading and the first row.
+  assert.ok(clean.slice(heading + 1, first).every((line) => line.trim() === "|" || line.trim() === ""
+    || /^\|?\s*$/.test(line.replace(/│/g, "|"))));
 });
 
-test("tiny heights preserve a message whenever one row exists", () => {
+test("heights below the mandatory budget show a bounded notice instead of clipped sections", () => {
   const history = messages(1);
-  for (const rows of [1, 2, 3, 4, 5, 8]) {
+  const floor = minimumHeight(false);
+  for (const rows of [1, 2, 3, 4, 5, 8, floor - 1]) {
     const sidebar = makeSidebar(history, rows);
     const lines = sidebar.render(SIDEBAR_WIDTH);
     assert.equal(lines.length, rows);
     assert.ok(lines.every((line) => visibleWidth(line) <= SIDEBAR_WIDTH));
-    assert.match(stripAnsi(lines.join("\n")), /unique-message-0/, `message missing at ${rows} rows`);
+    assert.match(stripAnsi(lines[0]!), /Sidebar/, `notice missing at ${rows} rows`);
+  }
+});
+
+test("the mandatory budget renders every section, message row included", () => {
+  const history = messages(1);
+  const sidebar = makeSidebar(history, minimumHeight(false));
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const joined = clean.join("\n");
+  for (const required of [/GOAL/, /SESSION/, /MESSAGES/, /unique-message-0/, /model-with-a-long-name/, /ctx 90%/]) {
+    assert.match(joined, required, `missing ${required} at the mandatory budget`);
+  }
+});
+
+test("every rail row paints the full sidebar width at every viable height", () => {
+  const history = messages(3);
+  for (let rows = minimumHeight(false); rows <= 60; rows++) {
+    const lines = makeSidebar(history, rows).render(SIDEBAR_WIDTH);
+    assert.equal(lines.length, rows);
+    assert.ok(
+      lines.every((line) => visibleWidth(line) === SIDEBAR_WIDTH),
+      `rail does not fill ${SIDEBAR_WIDTH} columns at ${rows} rows`,
+    );
   }
 });

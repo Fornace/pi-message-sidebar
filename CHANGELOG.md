@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.7.0
+
+> Goal-first rail with model-written message titles. Replaces the bottom status dock with stacked sections.
+
+- Message rows now show a short generated title instead of the raw prompt: `TitleService` calls `fornace-flash` through the Fornace gateway, caches per session on disk, and falls back to a deterministic first-words title when the gateway is unavailable or unconfigured. Titles never generate on the render path.
+- Rail is now GOAL / SESSION / MESSAGES / runtime, top to bottom, replacing the bottom status dock.
+- Fixed the crash on any populated render: the extension never passed `getTitle`, so `SidebarComponent.renderMessageRow` threw `TypeError: this.options.getTitle is not a function` and took the TUI down.
+- Rail rows paint all 42 columns; they previously painted 40 and left a two-column seam down the rail.
+- Row allocation reserves every section's mandatory rows before distributing optional ones, so the message row, the `/goal` guidance line, and the branch · session row can no longer be silently sliced away. Below the mandatory budget the rail shows a bounded resize notice instead of clipped sections.
+- A slot narrower than 42 columns renders the width-bounded notice rather than overflowing its column.
+- Non-home working directories keep their identity: `/private/tmp/x` no longer collapses to `x`, and long paths ellipsize from the front.
+- Escape while the rail is focused closes an open message detail first and only unfocuses on the second press.
+
 ## 1.6.0
 
 > Readability pass driven by a live populated PTY audit: less cropping, more signal per row.

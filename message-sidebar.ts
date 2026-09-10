@@ -10,6 +10,7 @@ import { resolveCmuxContext } from "./src/cmux.ts";
 import { isSidebarVisible } from "./src/constants.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
 import { SidebarComponent, type UserMessage } from "./src/sidebar-component.ts";
+import { fallbackTitle, TitleService } from "./src/titles.ts";
 
 function extractUserText(message: { content: unknown }): string {
   if (typeof message.content === "string") return message.content;
@@ -64,6 +65,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   let cachedContext: ExtensionContext | null = null;
   let footerData: ReadonlyFooterDataProvider | null = null;
   let cmuxContext: CmuxContext | null = null;
+  let titles: TitleService | null = null;
   let refreshQueued = false;
 
   const scheduleRefresh = (ctx: ExtensionContext | null = cachedContext) => {
@@ -94,6 +96,8 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     cachedContext = ctx;
+    titles = new TitleService(ctx.sessionManager.getSessionId(), () => scheduleRefresh(ctx));
+    titles.seed(collectUserMessages(ctx));
     void resolveCmuxContext().then((resolved) => {
       cmuxContext = resolved;
       scheduleRefresh(ctx);
@@ -108,6 +112,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           getFooterData: () => footerData,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getCmuxContext: () => cmuxContext,
+          getTitle: (messageId, text) => titles?.get(messageId, text) ?? fallbackTitle(text),
           messages: collectUserMessages(ctx),
         });
         return new SidebarLayoutBridge(currentTui, sidebar);
@@ -134,7 +139,9 @@ export default function messageSidebar(pi: ExtensionAPI): void {
       }
       if (tui && isViewportTUI(tui)) return undefined;
       if (matchesKey(data, "escape") && sidebar?.isFocused()) {
-        sidebar.setFocused(false);
+        // The component owns Escape while focused: it closes an open message
+        // detail first and only unfocuses on the second press.
+        sidebar.handleInput(data);
         tui?.requestRender();
         return { consume: true };
       }
@@ -147,6 +154,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
+    titles = null;
     sidebar = null;
     tui = null;
     cachedContext = null;
@@ -165,7 +173,10 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   });
 
   pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));
-  pi.on("turn_end", (_event, ctx) => scheduleRefresh(ctx));
+  pi.on("turn_end", (_event, ctx) => {
+    titles?.turnCompleted(collectUserMessages(ctx));
+    scheduleRefresh(ctx);
+  });
   pi.on("agent_end", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("agent_settled", (_event, ctx) => scheduleRefresh(ctx));
   pi.on("model_select", (_event, ctx) => scheduleRefresh(ctx));
