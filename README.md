@@ -4,36 +4,20 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 
 ## Features
 
-- Fixed 42-column panel on the right, stacked GOAL / SESSION / FILES / MESSAGES / RUNTIME
-- Embedded section headers: the label rides the rule with metadata right-aligned (branch, status, position, thinking level), one row where the old design spent two
-- Usage meters in the rule language: goal budget with counts and elapsed, context pressure with warning and danger thresholds
-- AI message summaries (`fornace-flash` through the Fornace gateway, `PI_SIDEBAR_SUMMARY_MODEL` to override): one plain sentence per prompt, cached per session on disk, with a deterministic preview as the placeholder until the model answers; an unconfigured gateway shows a setup hint under the MESSAGES heading
-- Theme-harmonized colors: semantic pi theme tokens for accents, badges, and selection, universal grays for content text, and a three-step background ladder; light terminals invert the ladder
-- Age-faded summaries with pi-recap motion: a pulsing dot while a summary is in flight, an accent settle sweep when it lands
+- The obsidian rail: a 42-column truecolor ladder with a deep well as canvas, a raised panel step for the goal card, accent-tinted selection, and two ghost tiers for chrome; 256-color and light-terminal variants included
+- The Fornace flag crowns the rail: the seven brand hues from the production logo, painted solid edge to edge, with a sheen band while the rail is live
+- Goal card as the hero: breathing status dot, budget share, bold objective across up to three lines, and a `bdg`-labeled meter in eighths-of-a-cell resolution that eases toward the live ratio
+- Ghost chrome: section labels sit flush left in a near-invisible tier with right-aligned metadata and an air row above; no rules, no dashes
+- Structured two-row message slots without ordinals: time, then the summary across 32-cell lines; selection is a two-row yellow bar on a soft accent tint
+- Motion language that idles for free: pulsing pending dots, landing sweeps, decaying arrival glows, left-to-right reveals, eased meters with a riding shimmer, and a victory flash when a goal completes
+- AI message summaries (`fornace-flash` through the Fornace gateway, `PI_SIDEBAR_SUMMARY_MODEL` to override): one plain sentence per prompt, cached per session on disk, with a deterministic preview until the model answers; an unconfigured gateway shows a setup hint
+- Age-faded summaries like pi-recap: newest bright, recent normal, older muted, previews dimmer still
 - Git-style change badges (M/A/U/D/R) on the FILES rows, from a throttled `git status` provider
-- Message detail header reports the message size in chars and wrapped lines
-- Structured two-row message slots: selection marker, ordinal, timestamp, and the summary wrapped across two lines
-- Ellipsis rows that count the hidden messages whenever the history outgrows the viewport
-- FILES section summarizing the session's edited files: distinct-file count in the heading, most recently written paths below, repeat counts included
-- Contiguous chronological message viewport that top-aligns short histories and follows new messages until you browse away
-- Every section's mandatory rows are reserved before optional rows are handed out; too short a terminal shows a resize notice rather than clipped sections
+- Message detail view with size in chars and wrapped lines, scrollable when the text overflows
+- Ellipsis rows counting hidden messages whenever the history outgrows the viewport
+- Contiguous chronological viewport that bottom-anchors the stream and follows new messages until you browse away
+- Mandatory rows reserved before optional rows are handed out; too short a terminal shows a resize notice rather than clipped sections
 - cmux session context that preserves the complete surface ref by truncating the workspace title first
-- Main transcript and editor render in their own reserved width
-- Persistent native right rail in fullscreen TUI mode
-- Compact regular-mode compositor in terminal-owned scrollback mode
-- Automatic collapse when the terminal cannot keep an 80-column main pane
-- `Ctrl+Shift+H` focuses the sidebar
-- Arrow keys navigate messages
-- `Enter` opens the full text of a message; the detail hint offers scrolling only when the message overflows its body
-- `c` copies the session path
-- `Escape` closes an open message, then returns focus to Pi
-- Width assertions cover every rendered sidebar line
-
-## Requirements
-
-Pi 0.84.4 or newer. This extension uses the renderer-switching and fullscreen layout APIs shipped with the 0.84 series.
-
-AI summaries call `fornace-flash` through the Fornace gateway and need `FORNACE_LLM_API_KEY` (and optionally `FORNACE_LLM_BASE_URL`) in the environment. Without the key the sidebar keeps deterministic previews and shows its setup hint; nothing warns or fails.
 
 ## Installation
 
@@ -62,7 +46,7 @@ The message body is one contiguous chronological viewport. New messages remain s
 - Press `↑` or `↓` to navigate.
 - Press `PageUp`, `PageDown`, `Home`, or `End` for larger jumps.
 - Press `Enter` to open the selected message's full text; scroll with `↑`/`↓` when the hint offers it.
-- Press `c` to copy the current session path.
+- Press `c` to copy the selected prompt while the rail is focused, or the session path when it is not.
 - Press `Escape` to close an open message, and again to return focus to Pi.
 
 ## Architecture
@@ -71,7 +55,8 @@ The message body is one contiguous chronological viewport. New messages remain s
 - `src/layout.ts` reserves a persistent horizontal region in fullscreen mode and composes the current screenful in regular mode.
 - `src/sidebar-component.ts` owns section budgets, the render cache, and focus handling.
 - `src/messages.ts` renders the message grid and detail view, and owns ID-stable navigation and follow-tail behavior.
-- `src/sections.ts` renders the embedded section headers, the goal, session, files, and runtime sections into fixed row budgets.
+- `src/goal-card.ts` renders the goal card; `src/sections.ts` renders ghost headers plus the session, files, and runtime sections into fixed row budgets.
+- `src/slots.ts` renders message slots; `src/flag.ts` paints the Fornace crown; `src/palette.ts` and `src/anim.ts` own the color ladder and the motion timing.
 - `src/summaries.ts` generates and caches one-line AI summaries off the render path.
 - `src/files.ts` collects the session's edited files from write tool calls.
 - `src/git-status.ts` maps the worktree status onto the shared M/A/U/D/R letter convention.
