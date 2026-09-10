@@ -4,11 +4,16 @@
 
 > Goal-first rail with model-written message titles. Replaces the bottom status dock with stacked sections.
 
-- Message rows now show a short generated title instead of the raw prompt: `TitleService` calls `fornace-flash` through the Fornace gateway, caches per session on disk, and falls back to a deterministic first-words title when the gateway is unavailable or unconfigured. Titles never generate on the render path.
+- Message rows now show a short generated title instead of the raw prompt: `TitleService` calls `fornace-flash` through the Fornace gateway, caches per session on disk, and falls back to a deterministic first-words title when the gateway is unavailable or unconfigured. Titles never generate on the render path. Title generation that fails while the gateway is configured reports once per session instead of silently degrading, and a replaced service is disposed on session restart.
 - Rail is now GOAL / SESSION / MESSAGES / runtime, top to bottom, replacing the bottom status dock.
 - Fixed the crash on any populated render: the extension never passed `getTitle`, so `SidebarComponent.renderMessageRow` threw `TypeError: this.options.getTitle is not a function` and took the TUI down.
 - Rail rows paint all 42 columns; they previously painted 40 and left a two-column seam down the rail.
+- Right-aligned rail elements (elapsed time, position counter) sit flush against the rail edge; they were three cells short after the geometry fix. Detail text uses the full 39-column content width.
 - Row allocation reserves every section's mandatory rows before distributing optional ones, so the message row, the `/goal` guidance line, and the branch · session row can no longer be silently sliced away. Below the mandatory budget the rail shows a bounded resize notice instead of clipped sections.
+- Sections fill their exact row budgets and render with no masking slices: a message vanishing under an open detail (compaction, branch switch), an empty history, and a one-row resize notice all render complete sections instead of crashing the TUI.
+- The detail scroll indicator reports a truthful range like `34-46 of 46` instead of an inaccurate `…0 more lines`, and the detail hint offers scrolling (`Esc back · ↑↓ scroll`) only when content actually overflows the body, otherwise just `Esc back`.
+- Message ordinals count only the messages the rail displays, so the detail header `#N` stays in agreement with the heading `N/total` after image-only or whitespace-only turns.
+- A missing `FORNACE_LLM_API_KEY` is treated as an unconfigured gateway (deterministic fallback titles) rather than a generation failure, so the session no longer warns spuriously.
 - A slot narrower than 42 columns renders the width-bounded notice rather than overflowing its column.
 - Non-home working directories keep their identity: `/private/tmp/x` no longer collapses to `x`, and long paths ellipsize from the front.
 - Escape while the rail is focused closes an open message detail first and only unfocuses on the second press.

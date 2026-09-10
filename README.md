@@ -16,7 +16,7 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 - Automatic collapse when the terminal cannot keep an 80-column main pane
 - `Ctrl+Shift+H` focuses the sidebar
 - Arrow keys navigate messages
-- `Enter` opens the full text of a message
+- `Enter` opens the full text of a message; the detail hint offers scrolling only when the message overflows its body
 - `c` copies the session path
 - `Escape` closes an open message, then returns focus to Pi
 - Width assertions cover every rendered sidebar line
@@ -51,7 +51,7 @@ The message body is one contiguous chronological viewport. New messages remain s
 - Press `Ctrl+Shift+H` to focus or unfocus the sidebar.
 - Press `↑` or `↓` to navigate.
 - Press `PageUp`, `PageDown`, `Home`, or `End` for larger jumps.
-- Press `Enter` to expand or collapse the selected message.
+- Press `Enter` to open the selected message's full text; scroll with `↑`/`↓` when the hint offers it.
 - Press `c` to copy the current session path.
 - Press `Escape` to close an open message, and again to return focus to Pi.
 
@@ -59,7 +59,7 @@ The message body is one contiguous chronological viewport. New messages remain s
 
 - `index.ts` is the auto-discovered extension entrypoint.
 - `src/layout.ts` reserves a persistent horizontal region in fullscreen mode and composes the current screenful in regular mode.
-- `src/sidebar-component.ts` owns ID-stable navigation, expansion, follow-tail behavior, and the row-aware contiguous viewport.
+- `src/sidebar-component.ts` owns ID-stable navigation, message detail view, follow-tail behavior, and the row-aware contiguous viewport.
 - `src/sections.ts` renders the goal, session, and runtime sections into fixed row budgets.
 - `src/titles.ts` generates and caches short message titles off the render path.
 - `src/status-dock.ts` supplies context-usage and status validation helpers.
