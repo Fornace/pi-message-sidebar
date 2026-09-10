@@ -18,9 +18,9 @@ type SummaryOutcome =
   | { status: "unusable" };
 
 const PROMPT_VERSION = 2;
-/** Widest stored summary: the rail wraps one summary across two 29-cell rows. */
-const STORED_MAX_CELLS = 58;
-const DISPLAY_MAX_CELLS = 58;
+/** Widest stored summary: the rail wraps one summary across two 28-cell rows. */
+const STORED_MAX_CELLS = 56;
+const DISPLAY_MAX_CELLS = 56;
 const INPUT_MAX_CHARS = 1200;
 /** How many recent messages stay eligible for their one sharpening pass. */
 const REFINE_WINDOW = 4;
@@ -43,7 +43,11 @@ export function isGatewayConfigured(): boolean {
 
 function sanitize(raw: string): string | null {
   const oneLine = raw
+    // Model output can echo ANSI from pasted terminal content: strip whole
+    // sequences first, then orphaned CSI remnants left after control stripping.
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, " ")
     .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\[[0-9;?]{0,12}m/g, " ")
     .replace(/^["'`\s]+|["'`\s]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();

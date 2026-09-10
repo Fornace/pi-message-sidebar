@@ -4,9 +4,11 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 
 ## Features
 
-- Fixed 42-column panel on the right, stacked GOAL / SESSION / MESSAGES / runtime
-- Model-written message titles (`fornace-flash` through the Fornace gateway), cached per session, with a deterministic fallback when the gateway is unconfigured or unreachable
-- Single message heading carrying the selected position and total
+- Fixed 42-column panel on the right, stacked GOAL / SESSION / FILES / MESSAGES / runtime
+- AI message summaries (`fornace-flash` through the Fornace gateway): one plain sentence per prompt, cached per session on disk, with a deterministic preview as the placeholder until the model answers; an unconfigured gateway shows a setup hint under the MESSAGES heading
+- Structured two-row message slots: selection marker, ordinal, timestamp, and the summary wrapped across two lines
+- Ellipsis rows that count the hidden messages whenever the history outgrows the viewport
+- FILES section summarizing the session's edited files: distinct-file count in the heading, most recently written paths below, repeat counts included
 - Contiguous chronological message viewport that top-aligns short histories and follows new messages until you browse away
 - Every section's mandatory rows are reserved before optional rows are handed out; too short a terminal shows a resize notice rather than clipped sections
 - cmux session context that preserves the complete surface ref by truncating the workspace title first
@@ -24,6 +26,8 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 ## Requirements
 
 Pi 0.84.4 or newer. This extension uses the renderer-switching and fullscreen layout APIs shipped with the 0.84 series.
+
+AI summaries call `fornace-flash` through the Fornace gateway and need `FORNACE_LLM_API_KEY` (and optionally `FORNACE_LLM_BASE_URL`) in the environment. Without the key the sidebar keeps deterministic previews and shows its setup hint; nothing warns or fails.
 
 ## Installation
 
@@ -59,9 +63,11 @@ The message body is one contiguous chronological viewport. New messages remain s
 
 - `index.ts` is the auto-discovered extension entrypoint.
 - `src/layout.ts` reserves a persistent horizontal region in fullscreen mode and composes the current screenful in regular mode.
-- `src/sidebar-component.ts` owns ID-stable navigation, message detail view, follow-tail behavior, and the row-aware contiguous viewport.
-- `src/sections.ts` renders the goal, session, and runtime sections into fixed row budgets.
-- `src/titles.ts` generates and caches short message titles off the render path.
+- `src/sidebar-component.ts` owns section budgets, the render cache, and focus handling.
+- `src/messages.ts` renders the message grid and detail view, and owns ID-stable navigation and follow-tail behavior.
+- `src/sections.ts` renders the goal, session, files, and runtime sections into fixed row budgets.
+- `src/summaries.ts` generates and caches one-line AI summaries off the render path.
+- `src/files.ts` collects the session's edited files from write tool calls.
 - `src/status-dock.ts` supplies context-usage and status validation helpers.
 - `src/goal.ts` reconstructs the active pi-codex-goal from session entries.
 - `src/cmux.ts` resolves the cmux workspace title and surface ref once per session.

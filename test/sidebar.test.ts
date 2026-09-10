@@ -192,7 +192,7 @@ test("message rows show one title per row with fallback", () => {
   assert.ok(oneRow, "Summary one must appear");
 
   // Structured rows: ordinal and time precede the summary text
-  assert.match(zeroRow, / 1 12:00 Fix the rail row budget/);
+  assert.match(zeroRow, /  1 12:00 Fix the rail row budget/);
 
   // Right-aligned pos/total in heading
   const heading = clean.find((l) => l.includes("MESSAGES"));

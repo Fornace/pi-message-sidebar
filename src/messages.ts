@@ -32,7 +32,7 @@ type MessagePanelOptions = {
 };
 
 /** Cells in front of the summary text: marker, ordinal, space, time, space. */
-const META_CELLS = 10;
+const META_CELLS = 11;
 const TEXT_CELLS = RAIL_CONTENT - META_CELLS;
 /** One message always occupies a two-row slot: summary line plus its wrap. */
 const ROWS_PER_MESSAGE = 2;
@@ -207,7 +207,7 @@ export class MessagePanel {
     const message = this.messages[index]!;
     const selected = message.id === this.selectedId;
     const marker = selected && focused ? `${FG_ACC}›${RST}` : " ";
-    const ordinal = truncateToWidth(String(message.index), 2, "…").padStart(2);
+    const ordinal = truncateToWidth(String(message.index), 3, "…").padStart(3);
     const time = formatTime(message.timestamp).padEnd(5);
     const meta = `${FG_FAINT}${ordinal} ${time} ${RST}`;
     const text = this.summaryLines(message);

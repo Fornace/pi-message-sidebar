@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.8.0
+
+> AI message summaries, a structured two-row message grid with hidden-count ellipsis rows, and an edited-files section.
+
+- Messages are now AI summaries: `SummaryService` asks `fornace-flash` for one plain sentence (at most 12 words, essential names preserved) per prompt, stores up to 58 cells so a summary fills two rail rows, and keeps the deterministic preview as the placeholder until the model answers. Previews render dimmed while no model summary exists. The cache lives in `sidebar-summaries` with `PI_SUMMARIES_DIR` as its override.
+- An unconfigured gateway now shows a setup hint (`AI summaries need FORNACE_LLM_API_KEY`) under the MESSAGES heading instead of staying fully silent; it never costs a message slot and never warns as a failure.
+- The message list is a structured grid instead of a text blob: every message renders as a two-row slot with a selection marker, right-aligned ordinal, timestamp, and the summary wrapped across two 29-cell lines.
+- When the history outgrows the viewport, faint ellipsis rows count the hidden messages (`… 11 earlier`, `… 2 later`); a message pair outranks the second ellipsis row when both cannot fit.
+- New FILES section summarizes the session's write footprint between SESSION and MESSAGES: the heading counts distinct files, the rows list the most recently written ones (latest first, front-trimmed paths, repeat counts) from `edit`/`write`/`fast_write` tool calls. The section yields its space to the goal block and the message viewport on short terminals and does not render at all without edits.
+- Message rendering moved into `src/messages.ts` (`MessagePanel`), which also owns the detail view; `sidebar-component.ts` returns below 400 lines, restoring the README claim.
+- The message section's mandatory budget grows to four rows (heading, one two-row message, hint), so a viable rail always shows a full message slot.
+
 ## 1.7.0
 
 > Goal-first rail with model-written message titles. Replaces the bottom status dock with stacked sections.

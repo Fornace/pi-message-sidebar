@@ -1,7 +1,8 @@
-# Handoff — pi-message-sidebar, after the 1.7.0 hardening series
+# Handoff — pi-message-sidebar, after the 1.8.0 summary redesign
 
-Written 2026-09-10. Repo `/Users/ffrappo/repos/pi-message-sidebar`, HEAD `451bc18`,
-tree clean, **9 commits unpushed**. The original 1.7.0 repair handoff (an audit
+Written 2026-09-10, updated the same day after the 1.8.0 series. Repo
+`/Users/ffrappo/repos/pi-message-sidebar`, tree clean, **unpushed commits**
+(1.7.0 hardening plus 1.8.0; `git log --oneline` for the exact count). The original 1.7.0 repair handoff (an audit
 listing eight defect groups; the file has since been deleted from `_tmp/`) is
 fully discharged — every group is fixed and covered by tests, and the commit
 messages in `b86668e..451bc18` record which change closed what. This document
@@ -25,13 +26,13 @@ tag push). Defects here reach people who are not Francesco — that is why the
 
 ## State
 
-39 tests: `goal` 9, `sidebar` 14, `titles` 5, `messages` 4, `status-dock` 4,
-`layout` 3. Gates all green at `451bc18`:
+47 tests: `goal` 9, `sidebar` 16, `summaries` 6, `messages` 4, `files` 3,
+`status-dock` 4, `layout` 3. Gates all green at the 1.8.0 tip:
 
 | Gate | Command | Result |
 |---|---|---|
 | Types | `npm run typecheck` | clean |
-| Unit | `npm test` | 39/39 |
+| Unit | `npm test` | 47/47 |
 | Entry point | `npm run test:load` | loads |
 | PTY | `npm run test:pty` | 4/4 |
 | PTY matrix | `npm run test:pty:matrix` | 8/8 |
@@ -74,15 +75,6 @@ Nothing is broken. These are decisions and known rough edges, roughly by value.
 **1. Push or not.** Nine commits are local. Francesco reviews first — that was
 the standing instruction, not an invention. Nothing is tagged or published.
 
-**2. `src/sidebar-component.ts` is 429 lines; `README.md:71` claims "Every
-source file stays below 400 lines."** One of the two has to give. The clean
-split is to extract the message list and detail view — `renderMessages`,
-`renderViewport`, `renderMessageRow`, `renderDetail`, `detailCapacity`,
-`wrappedDetail` — into `src/messages.ts`, matching how `src/sections.ts`
-already holds goal/session/runtime. That lands the file near 250 lines. The
-alternative is to drop the claim from the README. Decide, don't leave it
-false.
-
 **3. Deliberate spec deviation: `MANDATORY.session = 3`, not 4.** The original
 1.7.0 audit listed `branch · session id` as a mandatory row. I made it the *first
 optional* row instead, so a 14-row terminal renders a working rail rather than
@@ -91,7 +83,7 @@ a resize notice; at any normal height the row is present. `minimumHeight()` is
 other agent reviewed and agreed, but it is still a deviation from what
 Francesco specified — flip it in `MANDATORY` if he wants the spec honoured.
 
-**4. Only the newest 10 history messages get seeded titles** (`TitleService.seed`).
+**4. Only the newest 10 history messages get seeded summaries** (`SummaryService.seed`).
 Older messages in a long restored session keep deterministic fallback titles
 forever. Deliberate and documented, but if Francesco wants full history titled,
 that is the knob — mind the gateway cost on a 131-message session.
@@ -142,12 +134,19 @@ current HEAD in every message so the other side can tell whether it is behind.
 
 ## Environment
 
-- Titles: `fornace-flash` via `FORNACE_LLM_BASE_URL` (`https://llm.fornace.net`,
+- Summaries: `fornace-flash` via `FORNACE_LLM_BASE_URL` (`https://llm.fornace.net`,
   no `/v1` — the gateway accepts both paths) and `FORNACE_LLM_API_KEY`, both
-  already in the shell environment. Cache: `~/.pi/agent/tmp/sidebar-titles/`,
-  one JSON per session; `PI_TITLES_DIR` overrides it and tests use a temp dir.
-- A missing key is **unconfigured**, not a failure: fallback titles, no warning.
-  Keep that distinction — this package ships to people without the gateway.
+  already in the shell environment. Cache: `~/.pi/agent/tmp/sidebar-summaries/`,
+  one JSON per session; `PI_SUMMARIES_DIR` overrides it and tests use a temp dir.
+- A missing key is **unconfigured**, not a failure: deterministic previews, a
+  setup hint row under MESSAGES, no warning. Keep that distinction — this
+  package ships to people without the gateway.
+- 1.8.0 additions worth knowing: messages are two-row slots (marker, 3-cell
+  ordinal, time, 28-cell summary lines) in `src/messages.ts`; ellipsis rows
+  count hidden messages; `src/files.ts` feeds a FILES section from edit/write/
+  fast_write tool calls; `src/summaries.ts` is the renamed titles service with
+  a one-sentence prompt. Stored summaries may end in `\x1b[0m…\x1b[0m` — that
+  is `truncateToWidth`'s ANSI-wrapped ellipsis, not model garbage.
 - Populated sessions for gates:
   `~/.pi/agent/sessions/--Users-ffrappo-works-repos-mantice--/` (131 messages).
 - Scratch goes in `_tmp/` (gitignored). Durable docs in `docs/`.

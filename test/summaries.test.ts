@@ -218,6 +218,32 @@ test("isGatewayConfigured reflects the gateway key and gates the setup hint", ()
 
 test("a verbose model answer is clipped to the stored width", () => {
   const clipped = fallbackSummary("word ".repeat(200));
-  assert.ok(visibleWidth(clipped) <= 58, `fallback preview must stay within two rail rows (${visibleWidth(clipped)} cells)`);
-  assert.ok(clipped.endsWith("…") || visibleWidth(clipped) < 58);
+  assert.ok(visibleWidth(clipped) <= 56, `fallback preview must stay within two rail rows (${visibleWidth(clipped)} cells)`);
+  assert.ok(clipped.endsWith("…") || visibleWidth(clipped) < 56);
+});
+
+test("model output that echoes ANSI is sanitized before storage", async () => {
+  const temp = createTempDir();
+  process.env.PI_SUMMARIES_DIR = temp.path;
+  process.env.FORNACE_LLM_API_KEY = "test-key";
+
+  const mockFetch: typeof fetch = async () => {
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: "Fix \u001b[31mthe rail\u001b[0m and orphan [0m fragments" } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const summaries = new SummaryService("sess-ansi", () => {}, mockFetch);
+    summaries.turnCompleted([userMessage("m1", "fix the rail")]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const summary = summaries.get("m1", "fix the rail");
+    assert.ok(!summary.includes("\u001b"), "escape codes must not survive");
+    assert.ok(!/\[[0-9;?]*m/.test(summary), "orphaned CSI remnants must not survive");
+    assert.match(summary, /Fix the rail/);
+    summaries.dispose();
+  } finally {
+    temp.cleanup();
+  }
 });
