@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.1
+
+> The summary generator now writes to the slot it renders in, and the goal card ends at its meter.
+
+- The AI summary prompt carries the real slot budget: one sentence of at most 12 words that fits 64 characters, rendered on two 32-character lines. The stored and preview caps derive from the slot's `TEXT_CELLS` instead of a separate 56-cell constant, so summaries stop wrapping past what the rail shows. Prompt version bumped to 3 so cached answers regenerate.
+- The goal card no longer paints a trailing blank panel row under the budget meter: its allocation caps at eight rows and the spare row flows to the message stream.
+
 ## 2.0.0
 
 > The obsidian rail: a deep canvas, one raised goal card, ghost chrome, and a motion language that only moves when the session does.

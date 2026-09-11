@@ -218,8 +218,8 @@ test("isGatewayConfigured reflects the gateway key and gates the setup hint", ()
 
 test("a verbose model answer is clipped to the stored width", () => {
   const clipped = fallbackSummary("word ".repeat(200));
-  assert.ok(visibleWidth(clipped) <= 56, `fallback preview must stay within two rail rows (${visibleWidth(clipped)} cells)`);
-  assert.ok(clipped.endsWith("…") || visibleWidth(clipped) < 56);
+  assert.ok(visibleWidth(clipped) <= 64, `fallback preview must stay within two rail rows (${visibleWidth(clipped)} cells)`);
+  assert.ok(clipped.split(" ").every((word) => word === "word"), "the preview cuts at a word boundary, never mid-word");
 });
 
 test("model output that echoes ANSI is sanitized before storage", async () => {
@@ -265,7 +265,7 @@ test("a clipped summary stays plain text: the ellipsis must not carry ANSI reset
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const summary = summaries.get("m1", "long prompt");
-    assert.ok(summary.length <= 57, `clipped summary must be short (${summary.length} chars)`);
+    assert.ok(summary.length <= 2 * 32 + 1, `clipped summary must fit two slot lines (${summary.length} chars)`);
     assert.ok(!summary.includes("\u001b"), "truncateToWidth-injected resets must not survive storage");
     assert.ok(summary.endsWith("…"), `clipped summary ends with the ellipsis: ${summary}`);
     const fallback = fallbackSummary("word ".repeat(200));

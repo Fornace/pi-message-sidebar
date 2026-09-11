@@ -83,7 +83,7 @@ function allocate(height: number, hasGoal: boolean, fileCount: number): Layout |
     take(granted);
     spare -= granted;
   };
-  if (hasGoal) grow(5, (granted) => { goal += granted; }); // card air: pad, third title line, meter pad
+  if (hasGoal) grow(4, (granted) => { goal += granted; }); // card air, third title line, meter pad: 8 rows total
   grow(1, (granted) => { session += granted; });          // session id row
   if (fileCount > 0) {
     // FILES lives inside the session block: air, header, plus file rows. It

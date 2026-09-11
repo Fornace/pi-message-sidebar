@@ -108,7 +108,6 @@ export function renderGoalSection(
   const full = `${label}${meter ? `${meter} ` : ""}${palette.textMid}${counts}${RST} ${palette.ghost}·${RST} ${palette.textMid}${elapsed}${RST}`;
   const fits = 4 + (meter ? METER_CELLS + 1 : 0) + visibleWidth(counts) + 3 + visibleWidth(elapsed) <= width;
   push(railRow(palette, fits ? full : `${label}${meter ? `${meter} ` : ""}${palette.textMid}${counts}${RST}`, bg, width));
-  if (rows >= 9) push(railRow(palette, "", bg, width));
 
   while (lines.length < rows) push(railRow(palette, "", bg, width));
   return lines;
