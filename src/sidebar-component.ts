@@ -52,8 +52,8 @@ const MANDATORY = {
   goal: (hasGoal: boolean) => (hasGoal ? 4 : 1),
   /** separator + ghost header + surface/workspace + cwd. */
   session: 4,
-  /** air + ghost header + one two-row message + hint strip. */
-  messages: 5,
+  /** air + ghost header + one two-row message + the two-row hint strip. */
+  messages: 6,
   /** separator + ghost header + model route + ctx meter. */
   runtime: 4,
 } as const;

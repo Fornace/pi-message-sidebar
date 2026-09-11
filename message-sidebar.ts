@@ -4,14 +4,18 @@ import type {
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
-import { isViewportTUI, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { isViewportTUI, matchesKey } from "@earendil-works/pi-tui";
 import type { CmuxContext } from "./src/cmux.ts";
 import { resolveCmuxContext } from "./src/cmux.ts";
-import { isSidebarVisible } from "./src/constants.ts";
+import { MIN_MAIN_WIDTH, RESERVED_WIDTH, isSidebarVisible } from "./src/constants.ts";
 import { readSessionFileEdits } from "./src/files.ts";
+import { renderFooterRail } from "./src/footer-rail.ts";
 import { GitStatusProvider } from "./src/git-status.ts";
+import { readSessionGoal } from "./src/goal.ts";
 import { SidebarLayoutBridge } from "./src/layout.ts";
+import { resolvePalette } from "./src/palette.ts";
 import { SidebarComponent } from "./src/sidebar-component.ts";
+import { computeUsage } from "./src/status-dock.ts";
 import { isGatewayConfigured, SummaryService, fallbackSummary } from "./src/summaries.ts";
 import { stripControl } from "./src/style.ts";
 import type { UserMessage } from "./src/types.ts";
@@ -39,13 +43,16 @@ export function collectUserMessages(ctx: ExtensionContext): UserMessage[] {
   return messages;
 }
 
+/** Narrowest terminal where the rail can claim its column beside an 80-cell main pane. */
+const RAIL_BREAKPOINT = MIN_MAIN_WIDTH + RESERVED_WIDTH;
+
 class FooterDataBridge {
   constructor(
-    private readonly tui: TUI,
-    private readonly ctx: ExtensionContext,
     footerData: ReadonlyFooterDataProvider,
     private readonly onChange: () => void,
     private readonly onDispose: () => void,
+    /** Renders the footer-mode footer, or null while the rail owns the session chrome. */
+    private readonly renderFooter: (width: number) => string[] | null,
   ) {
     this.unsubscribe = footerData.onBranchChange(onChange);
   }
@@ -53,10 +60,7 @@ class FooterDataBridge {
   private readonly unsubscribe: () => void;
 
   render(width: number): string[] {
-    if (isSidebarVisible(this.tui.terminal.columns)) return [];
-    const model = this.ctx.model?.id ?? "no model";
-    const cwd = this.ctx.sessionManager.getCwd();
-    return [truncateToWidth(`${model}  ${cwd}`, width, "…")];
+    return this.renderFooter(width) ?? [];
   }
 
   invalidate(): void { this.onChange(); }
@@ -70,17 +74,44 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   let footerData: ReadonlyFooterDataProvider | null = null;
   let cmuxContext: CmuxContext | null = null;
   let summaries: SummaryService | null = null;
+  let userMessages: UserMessage[] = [];
+  /** Footer mode: the user pinned the rail's minimal double into the footer. */
+  let footerMode = false;
   const gitStatus = new GitStatusProvider();
   let refreshQueued = false;
+
+  /** The rail claims its column only when footer mode is off and the terminal is wide enough. */
+  const isRailVisible = (width: number): boolean => !footerMode && isSidebarVisible(width);
 
   const scheduleRefresh = (ctx: ExtensionContext | null = cachedContext) => {
     if (refreshQueued) return;
     refreshQueued = true;
     setImmediate(() => {
       refreshQueued = false;
-      if (sidebar && ctx) sidebar.updateMessages(collectUserMessages(ctx));
+      if (ctx) userMessages = collectUserMessages(ctx);
+      if (sidebar && ctx) sidebar.updateMessages(userMessages);
       else sidebar?.refresh();
     });
+  };
+
+  const setFooterMode = (mode: boolean, ctx: ExtensionContext): void => {
+    if (footerMode === mode) return;
+    footerMode = mode;
+    if (mode && sidebar?.isFocused()) sidebar.setFocused(false);
+    scheduleRefresh(ctx);
+    tui?.requestRender(true);
+  };
+
+  const toggleMode = (ctx: ExtensionContext): void => {
+    const wide = tui ? isSidebarVisible(tui.terminal.columns) : false;
+    const wasRail = !footerMode && wide;
+    if (!footerMode && !wide) {
+      ctx.ui.notify(`Rail needs a terminal width of at least ${RAIL_BREAKPOINT} columns`, "warning");
+      return;
+    }
+    setFooterMode(!footerMode, ctx);
+    // Staying in footer mode means the mode was pinned from the auto fallback.
+    if (!wasRail && footerMode) ctx.ui.notify("Footer mode pinned: Ctrl+Shift+S returns the rail", "info");
   };
 
   const toggleFocus = (ctx: ExtensionContext) => {
@@ -90,9 +121,11 @@ export default function messageSidebar(pi: ExtensionAPI): void {
       return;
     }
     if (!isSidebarVisible(activeTui.terminal.columns)) {
-      ctx.ui.notify("Sidebar needs a terminal width of at least 123 columns", "warning");
+      ctx.ui.notify(`Rail needs a terminal width of at least ${RAIL_BREAKPOINT} columns`, "warning");
       return;
     }
+    // Focusing while pinned to the footer brings the rail back first.
+    if (footerMode) setFooterMode(false, ctx);
     const focused = !sidebar.isFocused();
     sidebar.setFocused(focused);
     activeTui.requestRender();
@@ -101,6 +134,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     cachedContext = ctx;
+    userMessages = collectUserMessages(ctx);
     summaries?.dispose();
     summaries = new SummaryService(
       ctx.sessionManager.getSessionId(),
@@ -108,7 +142,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
       undefined,
       (err) => ctx.ui.notify(err, "warning"),
     );
-    summaries.seed(collectUserMessages(ctx));
+    summaries.seed(userMessages);
     void gitStatus.refresh(ctx.sessionManager.getCwd(), true, readSessionFileEdits(ctx).map((file) => file.path));
     void resolveCmuxContext().then((resolved) => {
       cmuxContext = resolved;
@@ -131,26 +165,42 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           summariesConfigured: isGatewayConfigured,
           getEditedFiles: () => readSessionFileEdits(ctx),
           getGitStatus: (path) => gitStatus.statusFor(path),
-          messages: collectUserMessages(ctx),
+          messages: userMessages,
         });
-        return new SidebarLayoutBridge(currentTui, sidebar);
+        return new SidebarLayoutBridge(currentTui, sidebar, (width) => isRailVisible(width));
       },
       { placement: "belowEditor" },
     );
 
-    ctx.ui.setFooter((currentTui, _theme, data) => {
+    ctx.ui.setFooter((_currentTui, _theme, data) => {
       footerData = data;
       scheduleRefresh(ctx);
-      return new FooterDataBridge(currentTui, ctx, data, () => scheduleRefresh(ctx), () => {
-        if (footerData === data) footerData = null;
-      });
+      return new FooterDataBridge(
+        data,
+        () => scheduleRefresh(ctx),
+        () => {
+          if (footerData === data) footerData = null;
+        },
+        (width) => {
+          if (isRailVisible(width)) return null;
+          return renderFooterRail({
+            ctx,
+            footerData: data,
+            palette: resolvePalette(ctx.ui.theme),
+            goal: readSessionGoal(ctx),
+            usage: computeUsage(ctx),
+            messages: userMessages,
+            summaryFor: (message) => summaries?.get(message.id, message.text) ?? fallbackSummary(message.text),
+          }, width);
+        },
+      );
     });
 
     ctx.ui.onTerminalInput((data) => {
       // Slash commands such as /goal mutate session entries without firing
       // turn events. Refresh on submit, not every keystroke.
       if (matchesKey(data, "return") || matchesKey(data, "enter")) scheduleRefresh();
-      if (tui && !isSidebarVisible(tui.terminal.columns) && sidebar?.isFocused()) {
+      if (tui && !isRailVisible(tui.terminal.columns) && sidebar?.isFocused()) {
         sidebar.setFocused(false);
         tui.requestRender();
         return undefined;
@@ -175,6 +225,8 @@ export default function messageSidebar(pi: ExtensionAPI): void {
     cachedContext = null;
     footerData = null;
     cmuxContext = null;
+    userMessages = [];
+    footerMode = false;
   });
 
   pi.registerShortcut("ctrl+shift+h", {
@@ -182,9 +234,19 @@ export default function messageSidebar(pi: ExtensionAPI): void {
     handler: async (ctx) => toggleFocus(ctx),
   });
 
+  pi.registerShortcut("ctrl+shift+s", {
+    description: "Toggle message sidebar between rail and footer",
+    handler: async (ctx) => toggleMode(ctx),
+  });
+
   pi.registerCommand("sidebar", {
     description: "Focus or unfocus message sidebar (Ctrl+Shift+H)",
     handler: async (_arguments, ctx) => toggleFocus(ctx),
+  });
+
+  pi.registerCommand("sidebar-footer", {
+    description: "Toggle the sidebar between rail and footer (Ctrl+Shift+S)",
+    handler: async (_arguments, ctx) => toggleMode(ctx),
   });
 
   pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));

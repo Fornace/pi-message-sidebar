@@ -8,7 +8,7 @@ import { RST, clip, formatElapsed, formatTokens, meterCells } from "./style.ts";
 
 const METER_CELLS = 12;
 
-function goalStatus(palette: Palette, goal: ThreadGoal): { color: string; label: string } {
+export function goalStatus(palette: Palette, goal: ThreadGoal): { color: string; label: string } {
   switch (goal.status) {
     case "active": return { color: palette.badgeAdded, label: "ACTIVE" };
     case "complete": return { color: palette.badgeAdded, label: "COMPLETE" };

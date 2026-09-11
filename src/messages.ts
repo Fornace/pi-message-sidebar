@@ -174,9 +174,9 @@ export class MessagePanel {
     // The setup hint replaces the spacer row under the heading; a message
     // slot is never sacrificed for it. An air row opens the section so every
     // ghost header sits one row below the content above it.
-    const showSetupHint = !this.options.summariesConfigured() && rows >= 5;
-    const spacer = rows >= (showSetupHint ? 6 : 5);
-    const consumed = 2 + (showSetupHint ? 1 : 0) + (spacer ? 1 : 0) + 1;
+    const showSetupHint = !this.options.summariesConfigured() && rows >= 6;
+    const spacer = rows >= (showSetupHint ? 7 : 6);
+    const consumed = 2 + (showSetupHint ? 1 : 0) + (spacer ? 1 : 0) + 2;
     const viewportRows = Math.max(2, rows - consumed);
     const sections = [
       railRow(palette, "", palette.bgDeep),
@@ -185,6 +185,7 @@ export class MessagePanel {
       ...(spacer ? [railRow(palette, "", palette.bgDeep)] : []),
       ...this.renderViewport(viewportRows, focused, palette, now),
       this.hintRow(palette, focused ? "[↑↓] select  [↵] open  [c] copy" : "[Ctrl+Shift+H] focus"),
+      this.hintRow(palette, "[Ctrl+Shift+S] footer"),
     ];
     while (sections.length < rows) sections.push(railRow(palette, "", palette.bgDeep));
     return sections.slice(0, rows);

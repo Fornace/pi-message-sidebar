@@ -61,6 +61,21 @@ test("regular mode collapses below the responsive breakpoint", () => {
   bridge.dispose();
 });
 
+test("footer mode hides the rail even above the breakpoint", () => {
+  const mainWidths: number[] = [];
+  const sideWidths: number[] = [];
+  const terminal = new FakeTerminal(200);
+  const tui = new TuiMainScreen(terminal as never);
+  tui.addChild(component("m", mainWidths));
+  const bridge = new SidebarLayoutBridge(tui, component("s", sideWidths), () => false);
+
+  const lines = tui.render(200);
+  assert.equal(mainWidths.at(-1), 200, "the main pane owns the full width");
+  assert.equal(sideWidths.length, 0, "the rail renders nothing while pinned to the footer");
+  assert.ok(lines.every((line) => visibleWidth(line) <= 200));
+  bridge.dispose();
+});
+
 test("fullscreen mode installs an HStack root across renderer switches", () => {
   const terminal = new FakeTerminal(breakpoint, 20);
   const rootWidths: number[] = [];

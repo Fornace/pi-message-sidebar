@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0
+
+> Footer mode: the rail's minimal double, docked as a two-row footer when the terminal is too small or the mode shortcut pins it there.
+
+- **Footer mode.** Below the 123-column breakpoint the extension no longer degrades to a bare `model  cwd` line. A two-row footer carries the rail's essence: a three-cell Fornace crown chip, the goal status with its budget share, the eight-cell context meter, message count, spend and model on the deep canvas; the raised panel row beneath carries the tail of the message stream (`»` plus the last summary, or the cwd while the session is silent) with the `[Ctrl+Shift+S] sidebar` hint right-aligned. A segment packer drops model, then cost, then count before it ever drops the goal or the meter, so a hostile width still renders two exact-width rows.
+- **`Ctrl+Shift+S`.** Toggles between rail and footer at any width: pinning the footer on a wide terminal, and returning the rail when pressed again. On a too-narrow terminal the shortcut pins the fallback (info notice) and warns instead of showing a rail that would not fit. `Ctrl+Shift+H` while pinned restores the rail and focuses it in one press. A `/sidebar-footer` command mirrors the shortcut.
+- **Two-row hint strip.** The rail's message section now teaches both shortcuts: `[Ctrl+Shift+H] focus` with `[Ctrl+Shift+S] footer` directly beneath, focused or not. The mandatory message budget grows to six rows, so the resize notice threshold moves with it.
+
 ## 2.0.1
 
 > The summary generator now writes to the slot it renders in, and the goal card ends at its meter.

@@ -17,6 +17,7 @@ Persistent message history sidebar for [Pi](https://pi.dev).
 - Ellipsis rows counting hidden messages whenever the history outgrows the viewport
 - Contiguous chronological viewport that bottom-anchors the stream and follows new messages until you browse away
 - Mandatory rows reserved before optional rows are handed out; too short a terminal shows a resize notice rather than clipped sections
+- Footer mode: the rail's minimal double as a two-row footer (crown chip, goal status, context meter, spend, stream tail) below the breakpoint or when pinned with `Ctrl+Shift+S`
 - cmux session context that preserves the complete surface ref by truncating the workspace title first
 
 ## Installation
@@ -38,11 +39,12 @@ pi install git:github.com/Fornace/pi-message-sidebar
 
 ## Usage
 
-The sidebar appears automatically in interactive mode when the terminal is at least 123 columns wide. It collapses below that breakpoint so Pi keeps a usable main pane. Fullscreen mode uses a persistent `HStack` right rail. Regular mode uses a compact compositor over the terminal's current screenful; because the terminal owns regular-mode scrollback, the sidebar is not permanently sticky while browsing old scrollback. An on-demand overlay is intentionally not implemented: overlay components are disposed on close, which conflicts with the persistent ID-stable sidebar state, so the compact compositor is kept instead.
+The sidebar appears automatically in interactive mode when the terminal is at least 123 columns wide. Below that breakpoint, or after pressing `Ctrl+Shift+S`, the sidebar docks into footer mode: a two-row footer with the Fornace crown chip, the goal status, the context meter, spend and model on the deep canvas, and the tail of the message stream on the raised panel row with the `[Ctrl+Shift+S] sidebar` hint. Pressing `Ctrl+Shift+S` again returns the rail on a wide terminal; on a narrow one it pins the footer and warns that the rail needs 123 columns. Fullscreen mode uses a persistent `HStack` right rail. Regular mode uses a compact compositor over the terminal's current screenful; because the terminal owns regular-mode scrollback, the sidebar is not permanently sticky while browsing old scrollback. An on-demand overlay is intentionally not implemented: overlay components are disposed on close, which conflicts with the persistent ID-stable sidebar state, so the compact compositor is kept instead.
 
 The message body is one contiguous chronological viewport. New messages remain selected while follow-tail is active. Navigating away preserves the selected message, expansion state, and visible range by message ID when history entries are inserted or refreshed.
 
-- Press `Ctrl+Shift+H` to focus or unfocus the sidebar.
+- Press `Ctrl+Shift+H` to focus or unfocus the sidebar. While pinned to the footer it restores the rail and focuses it.
+- Press `Ctrl+Shift+S` to toggle between the rail and footer mode, at any width.
 - Press `↑` or `↓` to navigate.
 - Press `PageUp`, `PageDown`, `Home`, or `End` for larger jumps.
 - Press `Enter` to open the selected message's full text; scroll with `↑`/`↓` when the hint offers it.
@@ -53,6 +55,7 @@ The message body is one contiguous chronological viewport. New messages remain s
 
 - `index.ts` is the auto-discovered extension entrypoint.
 - `src/layout.ts` reserves a persistent horizontal region in fullscreen mode and composes the current screenful in regular mode.
+- `src/footer-rail.ts` renders footer mode: the two-row minimal double of the rail.
 - `src/sidebar-component.ts` owns section budgets, the render cache, and focus handling.
 - `src/messages.ts` renders the message grid and detail view, and owns ID-stable navigation and follow-tail behavior.
 - `src/goal-card.ts` renders the goal card; `src/sections.ts` renders ghost headers plus the session, files, and runtime sections into fixed row budgets.

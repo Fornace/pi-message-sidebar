@@ -9,6 +9,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { MIN_MAIN_WIDTH, RESERVED_WIDTH, SIDEBAR_WIDTH, isSidebarVisible } from "./constants.ts";
 
+/** Decides whether the rail claims its column at a given terminal width. */
+export type RailVisibility = (width: number) => boolean;
+
 const REGULAR_PATCH_KEY = Symbol.for("pi-message-sidebar.regular-layout");
 const FULLSCREEN_PATCH_KEY = Symbol.for("pi-message-sidebar.fullscreen-layout");
 
@@ -16,18 +19,19 @@ type RegularPatchState = {
   originalRender: (this: TuiMainScreen, width: number) => string[];
   refs: number;
   sidebar: Component;
+  isVisible: RailVisibility;
 };
 
 type FullscreenPatchState = {
   originalSetLayoutRoot: (this: ViewportTUI, root: Component | undefined) => void;
   refs: number;
   sidebar: Component;
+  isVisible: RailVisibility;
   latestRoot?: Component;
   roots: WeakMap<object, Component>;
 };
 
-function defocusHiddenSidebar(tui: TUI, sidebar: Component, width: number): boolean {
-  const visible = isSidebarVisible(width);
+function defocusHiddenSidebar(tui: TUI, sidebar: Component, visible: boolean): boolean {
   if (!visible && (sidebar as any).isFocused?.()) {
     (sidebar as any).setFocused(false);
     if ((tui as any).getFocusedComponent?.() === sidebar) tui.setFocus(null);
@@ -40,7 +44,7 @@ function renderRegularLayout(
   state: RegularPatchState,
   width: number,
 ): string[] {
-  if (!defocusHiddenSidebar(renderer, state.sidebar, width)) {
+  if (!defocusHiddenSidebar(renderer, state.sidebar, state.isVisible(width))) {
     return state.originalRender.call(renderer, width);
   }
 
@@ -66,7 +70,7 @@ function renderRegularLayout(
   return result;
 }
 
-function installRegularLayout(sidebar: Component): () => void {
+function installRegularLayout(sidebar: Component, isVisible: RailVisibility): () => void {
   const prototype = TuiMainScreen.prototype as TuiMainScreen & {
     [REGULAR_PATCH_KEY]?: RegularPatchState;
   };
@@ -74,11 +78,12 @@ function installRegularLayout(sidebar: Component): () => void {
   if (existing) {
     existing.refs++;
     existing.sidebar = sidebar;
+    existing.isVisible = isVisible;
     return () => uninstallRegularLayout(prototype, existing);
   }
 
   const originalRender = prototype.render;
-  const state: RegularPatchState = { originalRender, refs: 1, sidebar };
+  const state: RegularPatchState = { originalRender, refs: 1, sidebar, isVisible };
   prototype[REGULAR_PATCH_KEY] = state;
   prototype.render = function renderWithSidebar(width: number): string[] {
     return renderRegularLayout(this, state, width);
@@ -96,7 +101,7 @@ function uninstallRegularLayout(
   delete prototype[REGULAR_PATCH_KEY];
 }
 
-function wrapFullscreenRoot(root: Component, sidebar: Component, tui: TUI): Component {
+function wrapFullscreenRoot(root: Component, sidebar: Component, tui: TUI, isVisible: RailVisibility): Component {
   return new HStack([
     { component: root, basis: 0, grow: 1, shrink: 1, minSize: MIN_MAIN_WIDTH },
     {
@@ -106,12 +111,12 @@ function wrapFullscreenRoot(root: Component, sidebar: Component, tui: TUI): Comp
       shrink: 0,
       minSize: SIDEBAR_WIDTH,
       maxSize: SIDEBAR_WIDTH,
-      visible: ({ width }) => defocusHiddenSidebar(tui, sidebar, width),
+      visible: ({ width }) => defocusHiddenSidebar(tui, sidebar, isVisible(width)),
     },
   ], { gap: RESERVED_WIDTH - SIDEBAR_WIDTH });
 }
 
-function installFullscreenLayout(tui: TUI, sidebar: Component): () => void {
+function installFullscreenLayout(tui: TUI, sidebar: Component, isVisible: RailVisibility): () => void {
   const prototype = TuiAltScreen.prototype as TuiAltScreen & {
     [FULLSCREEN_PATCH_KEY]?: FullscreenPatchState;
   };
@@ -119,6 +124,7 @@ function installFullscreenLayout(tui: TUI, sidebar: Component): () => void {
   if (existing) {
     existing.refs++;
     existing.sidebar = sidebar;
+    existing.isVisible = isVisible;
     reapplyCurrentFullscreenRoot(tui, existing);
     return () => uninstallFullscreenLayout(tui, prototype, existing);
   }
@@ -131,6 +137,7 @@ function installFullscreenLayout(tui: TUI, sidebar: Component): () => void {
     originalSetLayoutRoot,
     refs: 1,
     sidebar,
+    isVisible,
     roots: new WeakMap(),
   };
   prototype[FULLSCREEN_PATCH_KEY] = state;
@@ -141,7 +148,7 @@ function installFullscreenLayout(tui: TUI, sidebar: Component): () => void {
     }
     state.latestRoot = root;
     state.roots.set(this, root);
-    state.originalSetLayoutRoot.call(this, wrapFullscreenRoot(root, state.sidebar, this));
+    state.originalSetLayoutRoot.call(this, wrapFullscreenRoot(root, state.sidebar, this, state.isVisible));
   };
   reapplyCurrentFullscreenRoot(tui, state);
   return () => uninstallFullscreenLayout(tui, prototype, state);
@@ -171,9 +178,13 @@ export class SidebarLayoutBridge implements Component {
   private readonly uninstallRegular: () => void;
   private readonly uninstallFullscreen: () => void;
 
-  constructor(private readonly tui: TUI, sidebar: Component) {
-    this.uninstallRegular = installRegularLayout(sidebar);
-    this.uninstallFullscreen = installFullscreenLayout(tui, sidebar);
+  constructor(
+    private readonly tui: TUI,
+    sidebar: Component,
+    private readonly isVisible: RailVisibility = isSidebarVisible,
+  ) {
+    this.uninstallRegular = installRegularLayout(sidebar, this.isVisible);
+    this.uninstallFullscreen = installFullscreenLayout(tui, sidebar, this.isVisible);
     tui.requestRender(true);
   }
 

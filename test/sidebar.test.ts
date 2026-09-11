@@ -620,12 +620,11 @@ test("an absent goal rests on the base background, not the raised slab", () => {
 test("a history shorter than the viewport hugs the hint strip", () => {
   const rows = 30;
   const clean = makeSidebar({ messages: sampleMessages(2), rows }).render(SIDEBAR_WIDTH).map(stripAnsi);
-  // Hint sits last; the newest message's slot sits directly above it.
-  // Rail tail is hint, rule, then the three runtime rows.
-  assert.match(clean[rows - 8]!, /unique-message-1/, "the stream must bottom-anchor");
-  assert.match(clean[rows - 10]!, /unique-message-0/);
+  // The two-row hint strip sits last; the newest message's slot sits directly above it.
+  assert.match(clean[rows - 9]!, /unique-message-1/, "the stream must bottom-anchor");
+  assert.match(clean[rows - 11]!, /unique-message-0/);
   // The spare air collects under the heading, not above the hint.
-  assert.equal(clean[rows - 11]!.trim(), "│");
+  assert.equal(clean[rows - 12]!.trim(), "│");
 });
 
 test("the context meter colors track pressure thresholds", () => {
@@ -679,4 +678,12 @@ test("a missing goal is a single quiet rule row", () => {
   assert.ok(!goalRows[0]!.includes("─"), "the no-goal row is a ghost header, not a rule");
   const raw = makeSidebar({ messages: sampleMessages(2), rows: 20 }).render(SIDEBAR_WIDTH)[0]!;
   assert.ok(!raw.includes("\x1b[1m"), "the no-goal row must not be bold");
+});
+
+test("the hint strip teaches both shortcuts: focus and footer mode", () => {
+  const clean = makeSidebar({ messages: sampleMessages(2), rows: 30 }).render(SIDEBAR_WIDTH).map(stripAnsi);
+  const focus = clean.findIndex((l) => l.includes("[Ctrl+Shift+H] focus"));
+  const footer = clean.findIndex((l) => l.includes("[Ctrl+Shift+S] footer"));
+  assert.ok(focus >= 0, "the focus hint must render");
+  assert.ok(footer === focus + 1, "the footer hint sits directly under the focus hint");
 });
