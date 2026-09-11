@@ -172,7 +172,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
       { placement: "belowEditor" },
     );
 
-    ctx.ui.setFooter((_currentTui, _theme, data) => {
+    ctx.ui.setFooter((currentTui, _theme, data) => {
       footerData = data;
       scheduleRefresh(ctx);
       return new FooterDataBridge(
@@ -182,7 +182,10 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           if (footerData === data) footerData = null;
         },
         (width) => {
-          if (isRailVisible(width)) return null;
+          // The footer renders inside the main pane, so `width` is the main
+          // pane width while the rail is visible. The mode decision belongs
+          // to the terminal: rail and footer are alternative surfaces.
+          if (isRailVisible(currentTui.terminal.columns)) return null;
           return renderFooterRail({
             ctx,
             footerData: data,
@@ -226,7 +229,8 @@ export default function messageSidebar(pi: ExtensionAPI): void {
     footerData = null;
     cmuxContext = null;
     userMessages = [];
-    footerMode = false;
+    // footerMode stays: the pinned mode is a session-spanning preference,
+    // and resetting it here would flash the rail back in the exit frame.
   });
 
   pi.registerShortcut("ctrl+shift+h", {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.1
+
+> Rail and footer are strict alternatives: the footer-mode decision now reads the terminal width, not the render width.
+
+- While the rail was visible the custom footer rendered inside the main pane at the main pane width (99 cells on a 142-column terminal), so the mode check fell under its breakpoint and the fancy footer appeared beside the rail in both regular and fullscreen mode. The decision now reads `terminal.columns`; the render width only sizes the footer's own rows.
+- New `test:modes` PTY matrix asserts the exclusivity live: a wide terminal renders the rail and never the footer, a narrow terminal the footer and never the rail, and `Ctrl+Shift+S` on a wide terminal swaps the rail for the footer with no frame of both. The pin is driven with the kitty CSI-u sequence (`\x1b[115;6u`) because a legacy `\x13` byte carries no Shift: like `Ctrl+Shift+H`, the mode shortcut needs a terminal with enhanced key reporting.
+- Footer mode is sticky across in-process session restarts, and `session_shutdown` no longer resets it: the reset could flash the rail back into the exit frame before the layout patch was torn down.
+
 ## 2.1.0
 
 > Footer mode: the rail's minimal double, docked as a two-row footer when the terminal is too small or the mode shortcut pins it there.

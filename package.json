@@ -1,6 +1,6 @@
 {
   "name": "pi-message-sidebar",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Persistent responsive message history sidebar for Pi",
   "keywords": [
     "pi-package",
@@ -31,6 +31,7 @@
   "scripts": {
     "test": "node --import tsx --test test/*.test.ts",
     "test:pty": "node test/pty-smoke.mjs regular 142 55 && node test/pty-smoke.mjs regular 121 55 && node test/pty-smoke.mjs fullscreen 142 55 && node test/pty-smoke.mjs fullscreen 121 55",
+    "test:modes": "node test/footer-live.mjs regular 142 rail && node test/footer-live.mjs fullscreen 142 rail && node test/footer-live.mjs regular 121 auto && node test/footer-live.mjs fullscreen 121 auto && node test/footer-live.mjs regular 142 pin && node test/footer-live.mjs fullscreen 142 pin",
     "test:pty:matrix": "node test/pty-smoke.mjs regular 80 24 && node test/pty-smoke.mjs regular 120 40 && node test/pty-smoke.mjs regular 148 55 && node test/pty-smoke.mjs regular 200 60 && node test/pty-smoke.mjs fullscreen 80 24 && node test/pty-smoke.mjs fullscreen 120 40 && node test/pty-smoke.mjs fullscreen 148 55 && node test/pty-smoke.mjs fullscreen 200 60",
     "typecheck": "tsc --noEmit",
     "test:load": "node --import tsx test/load.test.mjs"

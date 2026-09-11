@@ -44,7 +44,7 @@ The sidebar appears automatically in interactive mode when the terminal is at le
 The message body is one contiguous chronological viewport. New messages remain selected while follow-tail is active. Navigating away preserves the selected message, expansion state, and visible range by message ID when history entries are inserted or refreshed.
 
 - Press `Ctrl+Shift+H` to focus or unfocus the sidebar. While pinned to the footer it restores the rail and focuses it.
-- Press `Ctrl+Shift+S` to toggle between the rail and footer mode, at any width.
+- Press `Ctrl+Shift+S` to toggle between the rail and footer mode, at any width. Both shortcuts need a terminal with enhanced key reporting (kitty protocol or modifyOtherKeys); the legacy control byte carries no Shift.
 - Press `↑` or `↓` to navigate.
 - Press `PageUp`, `PageDown`, `Home`, or `End` for larger jumps.
 - Press `Enter` to open the selected message's full text; scroll with `↑`/`↓` when the hint offers it.
