@@ -20,6 +20,7 @@ import { isGatewayConfigured, SummaryService, fallbackSummary } from "./src/summ
 import { stripControl } from "./src/style.ts";
 import type { UserMessage } from "./src/types.ts";
 import { WorkerActivityStore } from "./src/worker-activity.ts";
+import { summaryAdmission } from "./src/summary-admission.ts";
 
 function extractUserText(message: { content: unknown }): string {
   if (typeof message.content === "string") return message.content;
@@ -81,6 +82,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   const gitStatus = new GitStatusProvider();
   const workers = new WorkerActivityStore();
   let refreshQueued = false;
+  pi.events.on("mantice:spend-guard", () => summaries?.admissionChanged());
   pi.events.on("subagent:activity", (record: unknown) => {
     if (!cachedContext) return;
     try { if (workers.accept(record)) sidebar?.refresh(); }
@@ -155,6 +157,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
       () => scheduleRefresh(ctx),
       undefined,
       (err) => ctx.ui.notify(err, "warning"),
+      () => summaryAdmission(ctx),
     );
     summaries.seed(userMessages);
     void gitStatus.refresh(ctx.sessionManager.getCwd(), true, readSessionFileEdits(ctx).map((file) => file.path));
@@ -267,6 +270,24 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.registerCommand("sidebar-footer", {
     description: "Toggle the sidebar between rail and footer (Ctrl+Shift+S)",
     handler: async (_arguments, ctx) => toggleMode(ctx),
+  });
+
+  pi.registerCommand("sidebar-summaries", {
+    description: "Show summary status or explicitly retry after repair",
+    handler: async (args, ctx) => {
+      if (!summaries) throw new Error("Sidebar requires an interactive session");
+      if (args.trim() === "retry") {
+        if (!ctx.hasUI || !ctx.isIdle()) throw new Error("Summary retry requires an idle human session");
+        if (!summaryAdmission(ctx)) throw new Error("Resolve the parent guard before retrying summaries");
+        if (!await ctx.ui.confirm("Retry summaries?", "Grant another attempt for unfinished summaries")) return;
+        summaries.retry();
+        summaries.seed(userMessages);
+        summaries.turnCompleted(userMessages);
+      } else if (args.trim() && args.trim() !== "status") {
+        throw new Error("Use /sidebar-summaries status or /sidebar-summaries retry");
+      }
+      ctx.ui.notify(summaries.status(), "info");
+    },
   });
 
   pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));
