@@ -1,6 +1,6 @@
 import { stripControl } from "./style.ts";
 
-export type WorkerState = "queued" | "spawning" | "running" | "idle" | "completed" | "failed" | "aborted" | "paused";
+export type WorkerState = "queued" | "spawning" | "running" | "idle" | "completed" | "yielded" | "failed" | "aborted" | "paused";
 export type WorkerActivity = {
   version: 1;
   sessionId: string;
@@ -20,7 +20,7 @@ export type WorkerCard = WorkerActivity & {
   tokens: number;
   samples: { at: number; tokens: number }[];
 };
-const STATES = new Set(["queued", "spawning", "running", "idle", "completed", "failed", "aborted", "paused"]);
+const STATES = new Set(["queued", "spawning", "running", "idle", "completed", "yielded", "failed", "aborted", "paused"]);
 export const plainSnippet = (text: string, cap = 180): string =>
   stripControl(text).replace(/[\r\n\t]+/g, " ").replace(/ +/g, " ").trim().slice(0, cap);
 
@@ -67,7 +67,9 @@ export class WorkerActivityStore {
 
 export const isWorking = (card: WorkerCard): boolean => card.state === "running" || card.state === "spawning";
 export const needsAttention = (card: WorkerCard): boolean => card.state === "failed" || card.state === "paused";
+export const isHandoff = (card: WorkerCard): boolean => card.state === "yielded";
 export function visibleWorkers(cards: WorkerCard[]): WorkerCard[] {
-  return cards.filter(card => isWorking(card) || needsAttention(card) || card.state === "queued")
-    .sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || a.handle.localeCompare(b.handle));
+  return cards.filter(card => isWorking(card) || needsAttention(card) || isHandoff(card) || card.state === "queued")
+    .sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) ||
+      Number(isHandoff(b)) - Number(isHandoff(a)) || a.handle.localeCompare(b.handle));
 }
