@@ -27,20 +27,21 @@ export function renderWorkerSection(cards: WorkerCard[], rows: number, palette: 
   const attention = cards.filter(needsAttention).length;
   const idle = cards.filter(card => card.state === "idle").length;
   const closed = cards.filter(card => card.state === "completed" || card.state === "aborted").length;
-  const headline = attention ? `${attention} attention · ${active} active` : `${active} active`;
+  const queued = cards.filter(card => card.state === "queued").length;
+  const headline = `${attention ? `${attention} attention · ` : ""}${active} active${queued ? ` · ${queued} queued` : ""}`;
   lines.push(ghostHeader(palette, "CREW", bg, headline));
   const cardSlots = Math.max(0, Math.floor((rows - 2) / 3));
   for (const card of live.slice(0, cardSlots)) {
     const urgent = needsAttention(card);
     const tint = urgent ? palette.badgeModified : palette.accent;
-    const mark = card.state === "paused" ? "Ⅱ" : card.state === "failed" ? "!" : "●";
+    const mark = card.state === "queued" ? "○" : card.state === "paused" ? "Ⅱ" : card.state === "failed" ? "!" : "●";
     const age = formatElapsed(Math.max(0, now - card.at) / 1000);
     const right = `${formatTokens(card.tokens)} tok`;
     const left = `${mark} ${card.handle}`;
     const name = clip(left, RAIL_CONTENT - visibleWidth(right) - 1);
     const gap = " ".repeat(Math.max(1, RAIL_CONTENT - visibleWidth(name) - visibleWidth(right)));
     lines.push(railRow(palette, `${tint}${name}${RST}${gap}${palette.ghostBright}${right}${RST}`, bg));
-    const action = urgent ? card.state : card.observed || card.state;
+    const action = urgent || card.state === "queued" ? card.state : card.observed || card.state;
     const trace = tokenTrace(card);
     const meta = `${trace}${trace ? " " : ""}${age}`;
     const actionText = clip(`↳ ${action}`, RAIL_CONTENT - visibleWidth(meta) - 1);
