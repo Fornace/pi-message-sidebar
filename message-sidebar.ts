@@ -19,6 +19,7 @@ import { computeUsage } from "./src/status-dock.ts";
 import { isGatewayConfigured, SummaryService, fallbackSummary } from "./src/summaries.ts";
 import { stripControl } from "./src/style.ts";
 import type { UserMessage } from "./src/types.ts";
+import { WorkerActivityStore } from "./src/worker-activity.ts";
 
 function extractUserText(message: { content: unknown }): string {
   if (typeof message.content === "string") return message.content;
@@ -78,7 +79,16 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   /** Footer mode: the user pinned the rail's minimal double into the footer. */
   let footerMode = false;
   const gitStatus = new GitStatusProvider();
+  const workers = new WorkerActivityStore();
   let refreshQueued = false;
+  pi.events.on("subagent:activity", (record: unknown) => {
+    if (!cachedContext) return;
+    try { if (workers.accept(record)) sidebar?.refresh(); }
+    catch (error) {
+      console.error("[pi-sidebar] Invalid worker observation", error);
+      cachedContext.ui.setStatus("worker-activity-error", "Worker telemetry invalid");
+    }
+  });
 
   /** The rail claims its column only when footer mode is off and the terminal is wide enough. */
   const isRailVisible = (width: number): boolean => !footerMode && isSidebarVisible(width);
@@ -134,6 +144,10 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     cachedContext = ctx;
+    workers.reset(ctx.sessionManager.getSessionId());
+    setImmediate(() => {
+      if (cachedContext === ctx) pi.events.emit("subagent:activity-request", { sessionId: ctx.sessionManager.getSessionId() });
+    });
     userMessages = collectUserMessages(ctx);
     summaries?.dispose();
     summaries = new SummaryService(
@@ -165,6 +179,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           summariesConfigured: isGatewayConfigured,
           getEditedFiles: () => readSessionFileEdits(ctx),
           getGitStatus: (path) => gitStatus.statusFor(path),
+          getWorkerCards: () => workers.list(),
           messages: userMessages,
         });
         return new SidebarLayoutBridge(currentTui, sidebar, (width) => isRailVisible(width));
@@ -229,6 +244,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
     footerData = null;
     cmuxContext = null;
     userMessages = [];
+    workers.reset("");
     // footerMode stays: the pinned mode is a session-spanning preference,
     // and resetting it here would flash the rail back in the exit frame.
   });
