@@ -35,7 +35,7 @@ export function renderWorkerSection(cards: WorkerCard[], rows: number, palette: 
   for (const card of live.slice(0, cardSlots)) {
     const urgent = needsAttention(card);
     const handoff = isHandoff(card);
-    const tint = urgent ? palette.badgeModified : handoff ? palette.badgeCreated : palette.accent;
+    const tint = urgent ? palette.badgeModified : handoff ? palette.badgeAdded : palette.accent;
     const mark = card.state === "queued" ? "○" : card.state === "yielded" ? "↥" : card.state === "paused" ? "Ⅱ" : card.state === "failed" ? "!" : "●";
     const age = formatElapsed(Math.max(0, now - card.at) / 1000);
     const right = `${formatTokens(card.tokens)} tok`;
