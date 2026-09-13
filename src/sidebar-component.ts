@@ -20,6 +20,8 @@ import { renderGoalSection } from "./goal-card.ts";
 import { renderRuntimeSection, renderSessionSection } from "./sections.ts";
 import { computeUsage } from "./status-dock.ts";
 import { RST, fillRow } from "./style.ts";
+import type { WorkerCard } from "./worker-activity.ts";
+import { renderWorkerSection, workerRowsWanted } from "./worker-card.ts";
 
 import type { UserMessage } from "./types.ts";
 
@@ -38,10 +40,11 @@ type SidebarOptions = {
   summariesConfigured: () => boolean;
   getEditedFiles: () => FileEdit[];
   getGitStatus: (path: string) => string | null;
+  getWorkerCards?: () => WorkerCard[];
   messages: UserMessage[];
 };
 
-type Layout = { goal: number; session: number; runtime: number; messages: number };
+type Layout = { goal: number; crew: number; session: number; runtime: number; messages: number };
 
 /** Rows a section cannot render without losing content it is required to show.
  *  Section headers embed their own rules, so no separator rows are budgeted. */
@@ -69,13 +72,15 @@ export function minimumHeight(hasGoal: boolean): number {
  * budget does not fit, so the caller renders a notice instead of silently
  * slicing content away.
  */
-function allocate(height: number, hasGoal: boolean, fileCount: number): Layout | null {
-  if (height < minimumHeight(hasGoal)) return null;
+function allocate(height: number, hasGoal: boolean, fileCount: number, crewWanted = 0): Layout | null {
+  const crewMinimum = Math.min(5, crewWanted);
+  if (height < minimumHeight(hasGoal) + crewMinimum) return null;
 
   let goal = MANDATORY.goal(hasGoal);
+  let crew = crewMinimum;
   let session = MANDATORY.session;
   let runtime = MANDATORY.runtime;
-  let spare = height - minimumHeight(hasGoal);
+  let spare = height - minimumHeight(hasGoal) - crewMinimum;
 
   const grow = (rows: number, take: (granted: number) => void) => {
     const granted = Math.min(rows, spare);
@@ -83,6 +88,7 @@ function allocate(height: number, hasGoal: boolean, fileCount: number): Layout |
     take(granted);
     spare -= granted;
   };
+  grow(crewWanted - crew, (granted) => { crew += granted; });
   if (hasGoal) grow(4, (granted) => { goal += granted; }); // card air, third title line, meter pad: 8 rows total
   grow(1, (granted) => { session += granted; });          // session id row
   if (fileCount > 0) {
@@ -94,7 +100,7 @@ function allocate(height: number, hasGoal: boolean, fileCount: number): Layout |
   }
   grow(1, (granted) => { runtime += granted; });          // trailing breath under the meter
 
-  return { goal, session, runtime, messages: MANDATORY.messages + spare };
+  return { goal, crew, session, runtime, messages: MANDATORY.messages + spare };
 }
 
 export class SidebarComponent implements Component {
@@ -209,7 +215,8 @@ export class SidebarComponent implements Component {
 
     const hasGoal = readSessionGoal(this.options.ctx) !== null;
     const files = this.options.getEditedFiles();
-    const layout = safeWidth < SIDEBAR_WIDTH ? null : allocate(targetHeight, hasGoal, files.length);
+    const layout = safeWidth < SIDEBAR_WIDTH ? null
+      : allocate(targetHeight, hasGoal, files.length, workerRowsWanted(this.options.getWorkerCards?.() ?? []));
     const result = layout
       ? this.renderRail(safeWidth, targetHeight, layout, files)
       : this.renderNotice(safeWidth, targetHeight, hasGoal);
@@ -249,6 +256,7 @@ export class SidebarComponent implements Component {
     const ctxShimmer = this.ctxMeter.moving(this.ctxTarget) ? Math.floor(now / 120) % 10 : null;
 
     lines.push(...renderGoalSection(goal, layout.goal, palette, now, this.goalMeter, undefined, goalShimmer, this.victoryAt));
+    lines.push(...renderWorkerSection(this.options.getWorkerCards?.() ?? [], layout.crew, palette, now));
     lines.push(...renderSessionSection(
       ctx, this.options.getFooterData(), this.options.getCmuxContext(),
       layout.session, palette, files, this.options.getGitStatus,

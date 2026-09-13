@@ -19,6 +19,8 @@ import { computeUsage } from "./src/status-dock.ts";
 import { isGatewayConfigured, SummaryService, fallbackSummary } from "./src/summaries.ts";
 import { stripControl } from "./src/style.ts";
 import type { UserMessage } from "./src/types.ts";
+import { WorkerActivityStore } from "./src/worker-activity.ts";
+import { summaryAdmission } from "./src/summary-admission.ts";
 
 function extractUserText(message: { content: unknown }): string {
   if (typeof message.content === "string") return message.content;
@@ -78,7 +80,17 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   /** Footer mode: the user pinned the rail's minimal double into the footer. */
   let footerMode = false;
   const gitStatus = new GitStatusProvider();
+  const workers = new WorkerActivityStore();
   let refreshQueued = false;
+  pi.events.on("mantice:spend-guard", () => summaries?.admissionChanged());
+  pi.events.on("subagent:activity", (record: unknown) => {
+    if (!cachedContext) return;
+    try { if (workers.accept(record)) sidebar?.refresh(); }
+    catch (error) {
+      console.error("[pi-sidebar] Invalid worker observation", error);
+      cachedContext.ui.setStatus("worker-activity-error", "Worker telemetry invalid");
+    }
+  });
 
   /** The rail claims its column only when footer mode is off and the terminal is wide enough. */
   const isRailVisible = (width: number): boolean => !footerMode && isSidebarVisible(width);
@@ -134,6 +146,10 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     cachedContext = ctx;
+    workers.reset(ctx.sessionManager.getSessionId());
+    setImmediate(() => {
+      if (cachedContext === ctx) pi.events.emit("subagent:activity-request", { sessionId: ctx.sessionManager.getSessionId() });
+    });
     userMessages = collectUserMessages(ctx);
     summaries?.dispose();
     summaries = new SummaryService(
@@ -141,6 +157,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
       () => scheduleRefresh(ctx),
       undefined,
       (err) => ctx.ui.notify(err, "warning"),
+      () => summaryAdmission(ctx),
     );
     summaries.seed(userMessages);
     void gitStatus.refresh(ctx.sessionManager.getCwd(), true, readSessionFileEdits(ctx).map((file) => file.path));
@@ -165,6 +182,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
           summariesConfigured: isGatewayConfigured,
           getEditedFiles: () => readSessionFileEdits(ctx),
           getGitStatus: (path) => gitStatus.statusFor(path),
+          getWorkerCards: () => workers.list(),
           messages: userMessages,
         });
         return new SidebarLayoutBridge(currentTui, sidebar, (width) => isRailVisible(width));
@@ -229,6 +247,7 @@ export default function messageSidebar(pi: ExtensionAPI): void {
     footerData = null;
     cmuxContext = null;
     userMessages = [];
+    workers.reset("");
     // footerMode stays: the pinned mode is a session-spanning preference,
     // and resetting it here would flash the rail back in the exit frame.
   });
@@ -251,6 +270,24 @@ export default function messageSidebar(pi: ExtensionAPI): void {
   pi.registerCommand("sidebar-footer", {
     description: "Toggle the sidebar between rail and footer (Ctrl+Shift+S)",
     handler: async (_arguments, ctx) => toggleMode(ctx),
+  });
+
+  pi.registerCommand("sidebar-summaries", {
+    description: "Show summary status or explicitly retry after repair",
+    handler: async (args, ctx) => {
+      if (!summaries) throw new Error("Sidebar requires an interactive session");
+      if (args.trim() === "retry") {
+        if (!ctx.hasUI || !ctx.isIdle()) throw new Error("Summary retry requires an idle human session");
+        if (!summaryAdmission(ctx)) throw new Error("Resolve the parent guard before retrying summaries");
+        if (!await ctx.ui.confirm("Retry summaries?", "Grant another attempt for unfinished summaries")) return;
+        summaries.retry();
+        summaries.seed(userMessages);
+        summaries.turnCompleted(userMessages);
+      } else if (args.trim() && args.trim() !== "status") {
+        throw new Error("Use /sidebar-summaries status or /sidebar-summaries retry");
+      }
+      ctx.ui.notify(summaries.status(), "info");
+    },
   });
 
   pi.on("message_end", (_event, ctx) => scheduleRefresh(ctx));

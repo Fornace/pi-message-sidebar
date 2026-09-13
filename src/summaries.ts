@@ -1,12 +1,10 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { loadSummaryState, saveSummaryState, type SummaryRecord } from "./summary-state.ts";
 import { homedir } from "node:os";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { UserMessage } from "./types.ts";
 
 export type { UserMessage };
-
-type SummaryRecord = { summary: string; generations: number };
 
 /**
  * An absent gateway key is a configuration state, not a failure: the rail
@@ -15,7 +13,7 @@ type SummaryRecord = { summary: string; generations: number };
 type SummaryOutcome =
   | { status: "ok"; summary: string }
   | { status: "unconfigured" }
-  | { status: "unusable" };
+  | { status: "unusable"; reason: string };
 
 const PROMPT_VERSION = 3;
 /** Default summary model; PI_SIDEBAR_SUMMARY_MODEL overrides per machine. */
@@ -30,8 +28,8 @@ const DISPLAY_MAX_CELLS = 2 * TEXT_CELLS;
 const INPUT_MAX_CHARS = 1200;
 /** How many recent messages stay eligible for their one sharpening pass. */
 const REFINE_WINDOW = 4;
-/** The newest message is re-summarized this often, to catch drift in a long thread. */
-const SUMMARY_REFRESH_TURNS = 10;
+/** One initial request and at most one sharpening pass per immutable message. */
+const MAX_ATTEMPTS = 2;
 
 const SYSTEM_PROMPT = [
   "You write one-line summaries of a developer's chat prompts.",
@@ -96,10 +94,9 @@ function summariesDir(): string {
  * (fornace-flash via the mantice gateway).
  *
  * Lifecycle per message: an initial summary once its turn completes, one
- * refinement on a following turn while it is still in the recent window, and
- * a refresh of the newest message every tenth turn.
- * Summaries are cached per session and persisted to disk; generation never
- * runs on the render path and failures degrade to the deterministic preview.
+ * refinement on a following turn while it is still in the recent window.
+ * Attempts are reserved on disk before transport. Failures back off durably,
+ * with two attempts per message. The owner keeps working throughout.
  */
 export class SummaryService {
   private readonly cache = new Map<string, SummaryRecord>();
@@ -108,8 +105,11 @@ export class SummaryService {
   private readonly queue: Array<{ message: UserMessage; kind: "initial" | "refine" }> = [];
   private readonly pendingWork = new Map<string, { message: UserMessage; kind: "initial" | "refine" }>();
   private processing = false;
-  private turns = 0;
   private disposed = false;
+  private failure: string | null = null;
+  private retryAt = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private latestMessages: readonly UserMessage[] = [];
   private failureNotified = false;
   private currentAbort: AbortController | null = null;
   private readonly file: string;
@@ -119,6 +119,7 @@ export class SummaryService {
     private readonly onChange: () => void,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly onFailure?: (error: string) => void,
+    private readonly canRequest: () => boolean = () => true,
   ) {
     this.file = join(summariesDir(), `${sessionId.replace(/[^a-zA-Z0-9-]/g, "_")}.json`);
     this.load();
@@ -127,21 +128,21 @@ export class SummaryService {
   /**
    * Newest message gets its first summary; anything still on its first
    * summary within the recent window gets one sharpening pass on a later
-   * turn; the newest is refreshed every tenth turn.
+   * turn. Unchanged messages receive no periodic regeneration.
    *
    * The window matters: a turn normally arrives with a *new* newest message,
    * so a cadence that only ever looked at `messages.at(-1)` would hand every
    * message an initial summary and never refine anything.
    */
   turnCompleted(messages: readonly UserMessage[]): void {
-    if (this.disposed) return;
-    this.turns++;
+    this.latestMessages = messages;
+    if (this.disposed || this.failure) return;
     const latest = messages.at(-1);
     if (!latest) return;
 
-    if (!this.cache.has(latest.id) && !this.inFlight.has(latest.id)) {
+    if (!this.hasSummary(latest.id) && !this.inFlight.has(latest.id)) {
       this.enqueue(latest, "initial");
-    } else if (this.inFlight.has(latest.id) || this.turns % SUMMARY_REFRESH_TURNS === 0) {
+    } else if (this.inFlight.has(latest.id)) {
       this.enqueue(latest, "refine");
     }
 
@@ -153,9 +154,10 @@ export class SummaryService {
 
   /** Seed summaries for messages loaded from history (bounded to the newest ten). */
   seed(messages: readonly UserMessage[]): void {
-    if (this.disposed) return;
+    this.latestMessages = messages;
+    if (this.disposed || this.failure) return;
     for (const message of [...messages].reverse().slice(0, 10)) {
-      if (!this.cache.has(message.id)) this.enqueue(message, "initial");
+      if (!this.hasSummary(message.id)) this.enqueue(message, "initial");
     }
     void this.drain();
   }
@@ -173,7 +175,7 @@ export class SummaryService {
   }
 
   hasSummary(messageId: string): boolean {
-    return this.cache.has(messageId);
+    return Boolean(this.cache.get(messageId)?.summary);
   }
 
   /** True while a request for this message is queued or in flight. */
@@ -182,8 +184,27 @@ export class SummaryService {
     return this.queue.some((entry) => entry.message.id === messageId);
   }
 
+  /** Explicit human retry grants new attempts only for unfinished records. */
+  retry(): void {
+    if (this.processing || this.disposed) throw new Error("Summary service is busy");
+    this.load(); // An invalid cache must be repaired at its original path first.
+    if (this.failure?.startsWith("Cache repair required:")) throw new Error(this.failure);
+    for (const record of this.cache.values()) record.attempts = record.generations;
+    this.failure = null;
+    this.retryAt = 0;
+    clearTimeout(this.retryTimer);
+    this.failureNotified = false;
+    this.persist();
+  }
+
+  status(): string { return this.failure ?? "ready"; }
+
+  /** Admission changes stop the next transport; completed responses may settle. */
+  admissionChanged(): void { void this.drain(); }
+
   dispose(): void {
     this.disposed = true;
+    clearTimeout(this.retryTimer);
     this.currentAbort?.abort();
     this.queue.length = 0;
     this.pendingWork.clear();
@@ -192,12 +213,12 @@ export class SummaryService {
   // --- internals ---------------------------------------------------------
 
   private enqueue(message: UserMessage, kind: "initial" | "refine"): void {
-    if (this.disposed) return;
+    if (this.disposed || this.failure || (this.cache.get(message.id)?.attempts ?? 0) >= MAX_ATTEMPTS) return;
     if (this.inFlight.has(message.id)) {
       this.pendingWork.set(message.id, { message, kind });
       return;
     }
-    if (kind === "initial" && this.cache.has(message.id)) return;
+    if (kind === "initial" && this.hasSummary(message.id)) return;
     const existingIndex = this.queue.findIndex((entry) => entry.message.id === message.id);
     if (existingIndex >= 0) {
       if (kind === "refine") this.queue[existingIndex]!.kind = "refine";
@@ -207,10 +228,10 @@ export class SummaryService {
   }
 
   private async drain(): Promise<void> {
-    if (this.processing || this.disposed) return;
+    if (this.processing || this.disposed || this.failure || !this.canRequest()) return;
     this.processing = true;
     try {
-      while (this.queue.length > 0 && !this.disposed) {
+      while (this.queue.length > 0 && !this.disposed && !this.failure && this.canRequest()) {
         const entry = this.queue.shift();
         if (!entry) break;
         await this.generate(entry.message, entry.kind);
@@ -221,25 +242,36 @@ export class SummaryService {
   }
 
   private async generate(message: UserMessage, kind: "initial" | "refine"): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || this.failure || !this.canRequest()) return;
     const existing = this.cache.get(message.id)?.summary;
     if (kind === "initial" && existing) return;
+    if ((this.cache.get(message.id)?.attempts ?? 0) >= MAX_ATTEMPTS) return;
+    if (!isGatewayConfigured()) return;
     this.inFlight.add(message.id);
     try {
+      const previous = this.cache.get(message.id);
+      this.cache.set(message.id, { summary: previous?.summary ?? "", generations: previous?.generations ?? 0,
+        attempts: (previous?.attempts ?? 0) + 1, pending: true });
+      this.persist();
       const outcome = await this.requestSummary(message, kind, existing);
       if (this.disposed) return;
       if (outcome.status === "ok") {
         this.cache.set(message.id, {
           summary: outcome.summary,
           generations: (this.cache.get(message.id)?.generations ?? 0) + 1,
+          attempts: this.cache.get(message.id)!.attempts, pending: false,
         });
         this.persist();
         this.onChange();
       } else if (outcome.status === "unusable") {
-        this.reportFailure();
+        this.cache.get(message.id)!.pending = false;
+        this.reportFailure(outcome.reason);
       }
-    } catch {
-      if (!this.disposed) this.reportFailure();
+    } catch (error) {
+      if (!this.disposed) {
+        this.cache.get(message.id)!.pending = false;
+        this.reportFailure(error instanceof Error ? error.message : String(error));
+      }
     } finally {
       this.inFlight.delete(message.id);
       const pending = this.pendingWork.get(message.id);
@@ -251,11 +283,40 @@ export class SummaryService {
     }
   }
 
-  private reportFailure(): void {
-    if (!this.failureNotified && this.onFailure && !this.disposed) {
-      this.failureNotified = true;
-      this.onFailure("Sidebar summaries unavailable; using message previews");
+  private reportFailure(reason: string, persist = true): void {
+    this.failure = reason;
+    this.retryAt = this.retryAt > Date.now() ? this.retryAt : Date.now() + 60_000;
+    this.queue.length = 0;
+    this.pendingWork.clear();
+    if (persist) {
+      try { this.persist(); }
+      catch (error) { this.failure += `; cache write failed at ${this.file}: ${String(error)}`; }
     }
+    const message = `Sidebar summaries unavailable: ${this.failure}`;
+    if (!reason.startsWith("Cache repair required:")) this.scheduleRetry();
+    console.error(`[pi-sidebar] ${message}`);
+    if (!this.failureNotified && !this.disposed) {
+      this.failureNotified = true;
+      this.onFailure?.(message);
+    }
+  }
+
+  private scheduleRetry(): void {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => {
+      if (this.disposed) return;
+      if (Date.now() < this.retryAt) { this.scheduleRetry(); return; }
+      this.failure = null;
+      this.retryAt = 0;
+      try { this.persist(); }
+      catch (error) {
+        this.reportFailure(`Cache repair required: ${this.file}: ${String(error)}`, false);
+        return;
+      }
+      this.seed(this.latestMessages);
+      this.turnCompleted(this.latestMessages);
+    }, Math.min(2_147_483_647, Math.max(0, this.retryAt - Date.now())));
+    this.retryTimer.unref();
   }
 
   private async requestSummary(message: UserMessage, kind: "initial" | "refine", existing?: string): Promise<SummaryOutcome> {
@@ -285,11 +346,19 @@ export class SummaryService {
         }),
         signal: controller.signal,
       });
-      if (!response.ok) return { status: "unusable" };
+      if (!response.ok) {
+        const header = response.headers.get("retry-after");
+        if (header) {
+          const seconds = Number(header);
+          const deadline = Number.isFinite(seconds) ? Date.now() + seconds * 1000 : Date.parse(header);
+          if (Number.isSafeInteger(deadline) && deadline > Date.now()) this.retryAt = deadline;
+        }
+        return { status: "unusable", reason: `Summary provider HTTP ${response.status}` };
+      }
       const body = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
       const content = body.choices?.[0]?.message?.content;
       const summary = typeof content === "string" ? sanitize(content) : null;
-      return summary ? { status: "ok", summary } : { status: "unusable" };
+      return summary ? { status: "ok", summary } : { status: "unusable", reason: "Invalid summary response" };
     } finally {
       clearTimeout(timeout);
       if (this.currentAbort === controller) this.currentAbort = null;
@@ -298,31 +367,20 @@ export class SummaryService {
 
   private load(): void {
     try {
-      const parsed = JSON.parse(readFileSync(this.file, "utf8")) as Record<string, SummaryRecord>;
-      for (const [id, record] of Object.entries(parsed)) {
-        if (record && typeof record.summary === "string") {
-          const sanitized = sanitize(record.summary);
-          if (sanitized) {
-            this.cache.set(id, {
-              summary: sanitized,
-              generations: Number.isFinite(record.generations) ? record.generations : 1,
-            });
-          }
-        }
+      const state = loadSummaryState(this.file);
+      this.cache.clear();
+      for (const [id, record] of Object.entries(state.records)) {
+        this.cache.set(id, { ...record, summary: sanitize(record.summary) ?? "" });
       }
-    } catch {
-      // No persisted summaries yet: everything falls back until generation completes.
+      this.failure = state.failure;
+      this.retryAt = state.retryAt;
+      if (this.failure) this.reportFailure(this.failure, false);
+    } catch (error) {
+      this.reportFailure(`Cache repair required: ${this.file}: ${String(error)}`, false);
     }
   }
 
   private persist(): void {
-    try {
-      mkdirSync(dirname(this.file), { recursive: true });
-      const temp = `${this.file}.tmp`;
-      writeFileSync(temp, JSON.stringify(Object.fromEntries(this.cache)));
-      renameSync(temp, this.file);
-    } catch {
-      // Persistence is best-effort; in-memory summaries still serve this session.
-    }
+    saveSummaryState(this.file, { records: Object.fromEntries(this.cache), failure: this.failure, retryAt: this.retryAt });
   }
 }
