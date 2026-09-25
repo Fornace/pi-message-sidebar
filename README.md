@@ -49,7 +49,16 @@ The message body is one contiguous chronological viewport. New messages remain s
 - Press `PageUp`, `PageDown`, `Home`, or `End` for larger jumps.
 - Press `Enter` to open the selected message's full text; scroll with `↑`/`↓` when the hint offers it.
 - Press `c` to copy the selected prompt while the rail is focused, or the session path when it is not.
+- Press `f` while focused to enter files mode: a hierarchical second level over the FILES list. `↑↓ PageUp PageDown Home End` move the cursor through the window (widened to twelve rows), `Enter` or `c` copies the selected file's path, and `Escape` returns to message navigation.
 - Press `Escape` to close an open message, and again to return focus to Pi.
+
+The FILES list is capped at six rows (twelve in files mode) with `… N more`
+truncation rows, and the message section always keeps at least three visible
+slots: a 127-file edit list can no longer squeeze messages out of the rail.
+When pi runs inside cmux, the SESSION header leads with the stable role bound
+to this surface's UUID (`cmux-role id --bind <name>` binds one; the registry
+lives at `~/.pi/agent/state/cmux-roles.json`, overridable with
+`CMUX_ROLES_REGISTRY`); the dynamic `surface:N` ref is only the fallback.
 
 ## Architecture
 
