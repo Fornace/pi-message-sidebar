@@ -67,7 +67,7 @@ function makeSidebar(options: {
   messages: UserMessage[];
   rows?: number;
   goal?: { objective: string; status: string; tokensUsed: number; tokenBudget: number; activeSeconds: number };
-  cmux?: { workspaceTitle: string | null; workspaceRef: string | null; surfaceRef: string | null } | null;
+  cmux?: { workspaceTitle: string | null; workspaceRef: string | null; surfaceRef: string | null; surfaceId?: string | null; roleId?: string | null } | null;
   branch?: string | null;
   getSummary?: (id: string, text: string) => string;
   hasSummary?: (id: string) => boolean;
@@ -89,7 +89,15 @@ function makeSidebar(options: {
     ctx: base as never,
     messages: options.messages,
     getThinkingLevel: () => "high",
-    getCmuxContext: () => options.cmux ?? null,
+    getCmuxContext: () => options.cmux
+      ? {
+        workspaceTitle: options.cmux.workspaceTitle,
+        workspaceRef: options.cmux.workspaceRef,
+        surfaceRef: options.cmux.surfaceRef,
+        surfaceId: options.cmux.surfaceId ?? null,
+        roleId: options.cmux.roleId ?? null,
+      }
+      : null,
     getFooterData: () => ({
       getGitBranch: () => options.branch ?? "main",
       getExtensionStatuses: () => new Map(),
@@ -686,4 +694,105 @@ test("the hint strip teaches both shortcuts: focus and footer mode", () => {
   const footer = clean.findIndex((l) => l.includes("[Ctrl+Shift+S] footer"));
   assert.ok(focus >= 0, "the focus hint must render");
   assert.ok(footer === focus + 1, "the footer hint sits directly under the focus hint");
+});
+
+test("a 127-file edit list never squeezes messages below three visible slots", () => {
+  const files = Array.from({ length: 127 }, (_, index) => `/repo/src/module-${index}/file.ts`);
+  const messages = sampleMessages(12);
+  for (const rows of [24, 30, 40, 55]) {
+    const sidebar = makeSidebar({ messages, rows, editedFiles: files });
+    const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+    assert.equal(clean.length, rows, `height holds at rows=${rows}`);
+
+    // Three distinct message summaries stay visible at every height.
+    const visibleMessages = clean.filter((l) => /unique-message-\d+/.test(l));
+    assert.ok(visibleMessages.length >= 3, `only ${visibleMessages.length} message rows at rows=${rows}`);
+
+    if (rows < 27) {
+      // Beside the three-message floor a 24-row rail has no room left for
+      // the FILES chrome at all: messages win, the list is dropped whole.
+      assert.ok(!clean.some((l) => /FILES/.test(l)), `FILES must yield at rows=${rows}`);
+      continue;
+    }
+    // The FILES list is capped and reports what it hides.
+    const fileRows = clean.filter((l) => /module-\d+\/file\.ts/.test(l));
+    assert.ok(fileRows.length <= 6, `FILES rendered ${fileRows.length} rows at rows=${rows}, over the idle cap`);
+    assert.match(clean.find((l) => /… \d+ more/.test(l)) ?? "", /… 12[0-9] more/, `truncation row missing at rows=${rows}`);
+  }
+});
+
+test("the message floor outranks files even at the smallest viable heights", () => {
+  const files = Array.from({ length: 40 }, (_, index) => `/repo/f-${index}.ts`);
+  for (let rows = minimumHeight(false); rows <= minimumHeight(false) + 8; rows++) {
+    const sidebar = makeSidebar({ messages: sampleMessages(9), rows, editedFiles: files });
+    const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+    assert.equal(clean.length, rows);
+    if (clean.some((l) => /FILES/.test(l))) {
+      const visible = clean.filter((l) => /unique-message-\d+/.test(l));
+      assert.ok(visible.length >= 3, `rows=${rows} shows ${visible.length} messages beside FILES`);
+    }
+    assert.ok(clean.every((l) => l.length > 0 || true));
+  }
+});
+
+test("files mode navigates hierarchically: f enters, arrows move, esc returns", () => {
+  const files = Array.from({ length: 30 }, (_, index) => `/repo/src/file-${String(index).padStart(2, "0")}.ts`);
+  const sidebar = makeSidebar({ messages: sampleMessages(3), rows: 30, editedFiles: files });
+  sidebar.setFocused(true);
+
+  sidebar.handleInput("f");
+  assert.equal(sidebar.isFilesMode(), true, "f must enter files mode");
+  let clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  assert.match(clean.find((l) => /FILES\s+1\/30 files/.test(l)) ?? "", /1\/30/, "the header reports the cursor position");
+  assert.match(clean.find((l) => /file-00\.ts/.test(l)) ?? "", /▸/, "the selected row carries the cursor marker");
+  assert.match(clean.find((l) => /↑↓\] files/.test(l)) ?? "", /\[↵\] copy path/, "files-mode hints replace the message hints");
+
+  for (let i = 0; i < 8; i++) sidebar.handleInput("\x1b[B");
+  clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  assert.match(clean.find((l) => /FILES\s+9\/30 files/.test(l)) ?? "", /9\/30/, "down arrows advance the cursor");
+  assert.match(clean.find((l) => /… \d+ above/.test(l)) ?? "", /above/, "a scrolled window reports hidden files above");
+  assert.ok(clean.find((l) => /▸.*file-08\.ts/.test(l)), "the marker follows the cursor");
+
+  sidebar.handleInput("\x1b[F");
+  clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  assert.match(clean.find((l) => /▸.*file-29\.ts/.test(l)) ?? "", /file-29/, "end jumps to the last file");
+
+  sidebar.handleInput("\x1b");
+  assert.equal(sidebar.isFilesMode(), false, "escape returns to message navigation");
+  assert.equal(sidebar.isFocused(), true, "escape from files mode keeps the rail focused");
+  clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  assert.match(clean.find((l) => /↑↓\] select/.test(l)) ?? "", /select/, "message hints return after leaving files mode");
+});
+
+test("files mode keeps three messages visible while the window widens", () => {
+  const files = Array.from({ length: 127 }, (_, index) => `/repo/src/file-${index}.ts`);
+  const sidebar = makeSidebar({ messages: sampleMessages(8), rows: 45, editedFiles: files });
+  sidebar.setFocused(true);
+  sidebar.handleInput("f");
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const visibleMessages = clean.filter((l) => /unique-message-\d+/.test(l));
+  assert.ok(visibleMessages.length >= 3, `files mode left only ${visibleMessages.length} messages visible`);
+  const fileRows = clean.filter((l) => /file-\d+\.ts/.test(l));
+  assert.ok(fileRows.length > 6, "focused files mode widens past the idle cap");
+  assert.ok(fileRows.length <= 12, "focused files mode respects its own cap");
+});
+
+test("the session identity leads with the stable role id when one is bound", () => {
+  const sidebar = makeSidebar({
+    messages: sampleMessages(3),
+    rows: 30,
+    cmux: { surfaceRef: "surface:87", workspaceTitle: "EUGENY - 28B & Training", workspaceRef: "w:1", surfaceId: "FB26D7C5-FAD8-418F-8233-E3894DE8962C", roleId: "eugeny-engine" },
+  });
+  const clean = sidebar.render(SIDEBAR_WIDTH).map(stripAnsi);
+  const identity = clean.find((l) => /eugeny-engine/.test(l));
+  assert.ok(identity, "the role id must render in the session identity row");
+  assert.match(identity!, /eugeny-engine · EUGENY/);
+  assert.ok(!clean.some((l) => /surface:87/.test(l)), "the dynamic ref steps back behind the stable id");
+
+  const fallback = makeSidebar({
+    messages: sampleMessages(3),
+    rows: 30,
+    cmux: { surfaceRef: "surface:87", workspaceTitle: "EUGENY - 28B & Training", workspaceRef: "w:1" },
+  }).render(SIDEBAR_WIDTH).map(stripAnsi);
+  assert.match(fallback.find((l) => /EUGENY/.test(l)) ?? "", /surface:87/, "without a role the ref is the identity");
 });

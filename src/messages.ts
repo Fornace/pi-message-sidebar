@@ -151,7 +151,7 @@ export class MessagePanel {
   }
 
   /** Renders exactly `rows` lines: heading, optional setup hint, viewport, hint strip. */
-  renderSection(rows: number, focused: boolean, palette: Palette, now: number): string[] {
+  renderSection(rows: number, focused: boolean, palette: Palette, now: number, hints: [string, string] | null = null): string[] {
     const total = this.messages.length;
     const detailIndex = this.detailId ? this.indexForId(this.detailId) : -1;
     const position = detailIndex >= 0 ? detailIndex + 1 : this.selectedIndex() + 1;
@@ -184,8 +184,8 @@ export class MessagePanel {
       ...(showSetupHint ? [railRow(palette, `${palette.ghostBright}${SETUP_HINT}${RST}`, palette.bgDeep)] : []),
       ...(spacer ? [railRow(palette, "", palette.bgDeep)] : []),
       ...this.renderViewport(viewportRows, focused, palette, now),
-      this.hintRow(palette, focused ? "[↑↓] select  [↵] open  [c] copy" : "[Ctrl+Shift+H] focus"),
-      this.hintRow(palette, "[Ctrl+Shift+S] footer"),
+      this.hintRow(palette, hints?.[0] ?? (focused ? "[↑↓] select  [↵] open  [c] copy" : "[Ctrl+Shift+H] focus")),
+      this.hintRow(palette, hints?.[1] ?? "[Ctrl+Shift+S] footer"),
     ];
     while (sections.length < rows) sections.push(railRow(palette, "", palette.bgDeep));
     return sections.slice(0, rows);
