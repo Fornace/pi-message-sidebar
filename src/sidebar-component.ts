@@ -11,13 +11,14 @@ import { ANIM_TICK_MS, EasedMeter, isVictory } from "./anim.ts";
 import type { CmuxContext } from "./cmux.ts";
 import { SIDEBAR_WIDTH } from "./constants.ts";
 import type { FileEdit } from "./files.ts";
+import { FilesNav, MAX_FILE_ROWS_FOCUS, MAX_FILE_ROWS_IDLE } from "./files-nav.ts";
 import { flagRow } from "./flag.ts";
 import { readSessionGoal } from "./goal.ts";
 import { assertLinesFit } from "./layout.ts";
 import { MessagePanel } from "./messages.ts";
 import { resolvePalette } from "./palette.ts";
 import { renderGoalSection } from "./goal-card.ts";
-import { renderRuntimeSection, renderSessionSection } from "./sections.ts";
+import { renderRuntimeSection, renderSessionSection, type FileWindow } from "./sections.ts";
 import { computeUsage } from "./status-dock.ts";
 import { RST, fillRow } from "./style.ts";
 import type { WorkerCard } from "./worker-activity.ts";
@@ -44,7 +45,7 @@ type SidebarOptions = {
   messages: UserMessage[];
 };
 
-type Layout = { goal: number; crew: number; session: number; runtime: number; messages: number };
+type Layout = { goal: number; crew: number; session: number; runtime: number; messages: number; files: number };
 
 /** Rows a section cannot render without losing content it is required to show.
  *  Section headers embed their own rules, so no separator rows are budgeted. */
@@ -61,18 +62,32 @@ const MANDATORY = {
   runtime: 4,
 } as const;
 
+/** Message slots the rail guarantees visible before FILES may claim spare rows.
+ *  The mandatory budget carries one slot; the floor adds two more pairs, the
+ *  top ellipsis row, and the spacer under the heading, so three messages stay
+ *  readable at any height. */
+const MESSAGE_FLOOR_SLOTS = 3;
+const MESSAGE_FLOOR_EXTRA = (MESSAGE_FLOOR_SLOTS - 1) * 2 + 2;
+
 /** Smallest terminal that can hold every mandatory row; below it the rail shows a notice. */
 export function minimumHeight(hasGoal: boolean): number {
   return MANDATORY.crown + MANDATORY.goal(hasGoal) + MANDATORY.session + MANDATORY.messages + MANDATORY.runtime;
 }
 
 /**
- * Mandatory rows first, then optional rows in priority order, then every
- * remaining row to the message viewport. Returns null when the mandatory
- * budget does not fit, so the caller renders a notice instead of silently
- * slicing content away.
+ * Mandatory rows first, then the message floor, then optional rows in
+ * priority order, then every remaining row to the message viewport. FILES is
+ * capped so a long edit list can never squeeze MESSAGES below the floor.
+ * Returns null when the mandatory budget does not fit, so the caller renders
+ * a notice instead of silently slicing content away.
  */
-function allocate(height: number, hasGoal: boolean, fileCount: number, crewWanted = 0): Layout | null {
+function allocate(
+  height: number,
+  hasGoal: boolean,
+  fileCount: number,
+  crewWanted = 0,
+  fileCap = MAX_FILE_ROWS_IDLE,
+): Layout | null {
   const crewMinimum = Math.min(5, crewWanted);
   if (height < minimumHeight(hasGoal) + crewMinimum) return null;
 
@@ -80,6 +95,8 @@ function allocate(height: number, hasGoal: boolean, fileCount: number, crewWante
   let crew = crewMinimum;
   let session = MANDATORY.session;
   let runtime = MANDATORY.runtime;
+  let messages = MANDATORY.messages;
+  let files = 0;
   let spare = height - minimumHeight(hasGoal) - crewMinimum;
 
   const grow = (rows: number, take: (granted: number) => void) => {
@@ -88,24 +105,31 @@ function allocate(height: number, hasGoal: boolean, fileCount: number, crewWante
     take(granted);
     spare -= granted;
   };
+  // The floor outranks every optional grow: three visible messages come
+  // before crew cards, goal air, the session id row, and FILES.
+  grow(MESSAGE_FLOOR_EXTRA, (granted) => { messages += granted; });
   grow(crewWanted - crew, (granted) => { crew += granted; });
   if (hasGoal) grow(4, (granted) => { goal += granted; }); // card air, third title line, meter pad: 8 rows total
   grow(1, (granted) => { session += granted; });          // session id row
   if (fileCount > 0) {
-    // FILES lives inside the session block: air, header, plus file rows. It
-    // needs the air, the header and one row to be worth anything, so a
-    // cramped rail leaves it out entirely.
-    const granted = Math.min(2 + fileCount, spare);
-    if (granted >= 3) { session += granted; spare -= granted; }
+    // FILES lives inside the session block: air, header, file rows, and a
+    // bottom ellipsis row when the list is truncated. It needs the air, the
+    // header and one row to be worth anything, so a cramped rail leaves it
+    // out entirely.
+    const shown = Math.min(fileCount, fileCap);
+    const chrome = 2 + (fileCount > shown ? 1 : 0);
+    const granted = Math.min(chrome + shown, spare);
+    if (granted >= chrome + 1) { session += granted; files = granted; spare -= granted; }
   }
   grow(1, (granted) => { runtime += granted; });          // trailing breath under the meter
 
-  return { goal, crew, session, runtime, messages: MANDATORY.messages + spare };
+  return { goal, crew, session, runtime, messages: messages + spare, files };
 }
 
 export class SidebarComponent implements Component {
   private focused = false;
   private panel: MessagePanel;
+  private readonly filesNav = new FilesNav();
   private version = 0;
   private restoreFocus: Component | null = null;
   private cachedSignature = "";
@@ -136,6 +160,7 @@ export class SidebarComponent implements Component {
   isFollowingTail(): boolean { return this.panel.isFollowingTail(); }
   isExpanded(messageId: string): boolean { return this.panel.isExpanded(messageId); }
   isDetailOpen(): boolean { return this.panel.isDetailOpen(); }
+  isFilesMode(): boolean { return this.filesNav.active(); }
 
   setFocused(focused: boolean): void {
     if (this.focused === focused) return;
@@ -145,6 +170,7 @@ export class SidebarComponent implements Component {
       this.options.tui.setFocus(this);
     } else {
       this.focused = false;
+      this.filesNav.leave();
       this.panel.closeDetail();
       if ((this.options.tui as any).getFocusedComponent?.() === this) this.options.tui.setFocus(this.restoreFocus);
       this.restoreFocus = null;
@@ -197,14 +223,39 @@ export class SidebarComponent implements Component {
 
   handleInput(data: string): void {
     if (matchesKey(data, "escape")) {
+      if (this.filesNav.active()) { this.filesNav.leave(); this.refresh(); return; }
       if (this.panel.isDetailOpen()) { this.panel.closeDetail(); return; }
       return this.setFocused(false);
+    }
+    if (this.filesNav.active()) {
+      if (matchesKey(data, "c") || matchesKey(data, "return") || matchesKey(data, "enter") || data === " ") {
+        void this.copySelectedFile();
+        return;
+      }
+      if (this.filesNav.handleInput(data, this.options.getEditedFiles().length)) this.refresh();
+      return;
+    }
+    if (!this.panel.isDetailOpen() && matchesKey(data, "f") && this.options.getEditedFiles().length > 0) {
+      this.filesNav.enter(this.options.getEditedFiles().length);
+      this.refresh();
+      return;
     }
     if (!this.panel.isDetailOpen() && matchesKey(data, "c")) {
       void this.copyRailTarget();
       return;
     }
     this.panel.handleInput(data);
+  }
+
+  private async copySelectedFile(): Promise<void> {
+    const file = this.filesNav.selected(this.options.getEditedFiles());
+    if (!file) return;
+    try {
+      await copyToClipboard(file.path);
+      this.options.ctx.ui.notify(`Copied ${basename(file.path)}`, "info");
+    } catch {
+      this.options.ctx.ui.notify("Copy failed", "warning");
+    }
   }
 
   render(width: number): string[] {
@@ -216,7 +267,7 @@ export class SidebarComponent implements Component {
     const hasGoal = readSessionGoal(this.options.ctx) !== null;
     const files = this.options.getEditedFiles();
     const layout = safeWidth < SIDEBAR_WIDTH ? null
-      : allocate(targetHeight, hasGoal, files.length, workerRowsWanted(this.options.getWorkerCards?.() ?? []));
+      : allocate(targetHeight, hasGoal, files.length, workerRowsWanted(this.options.getWorkerCards?.() ?? []), this.filesNav.capRows());
     const result = layout
       ? this.renderRail(safeWidth, targetHeight, layout, files)
       : this.renderNotice(safeWidth, targetHeight, hasGoal);
@@ -257,11 +308,17 @@ export class SidebarComponent implements Component {
 
     lines.push(...renderGoalSection(goal, layout.goal, palette, now, this.goalMeter, undefined, goalShimmer, this.victoryAt));
     lines.push(...renderWorkerSection(this.options.getWorkerCards?.() ?? [], layout.crew, palette, now));
+    const fileWindow = this.filesNav.resolveWindow(files, layout.files);
     lines.push(...renderSessionSection(
       ctx, this.options.getFooterData(), this.options.getCmuxContext(),
-      layout.session, palette, files, this.options.getGitStatus,
+      layout.session, palette, files, this.options.getGitStatus, fileWindow,
     ));
-    lines.push(...this.panel.renderSection(layout.messages, this.focused, palette, now));
+    const hints = this.filesNav.active()
+      ? (["[↑↓] files  [↵] copy path", "[f] messages  [Esc] back"] as [string, string])
+      : this.focused && files.length > 0
+        ? (["[↑↓] select  [↵] open  [c] copy", "[f] files  [Ctrl+Shift+S] footer"] as [string, string])
+        : null;
+    lines.push(...this.panel.renderSection(layout.messages, this.focused, palette, now, hints));
     lines.push(...renderRuntimeSection(
       ctx, this.options.getFooterData(), this.options.getThinkingLevel(),
       layout.runtime, palette, undefined, this.ctxMeter.get(), ctxShimmer,
@@ -300,8 +357,9 @@ export class SidebarComponent implements Component {
       usage,
       statuses: statuses && typeof (statuses as any).entries === "function" ? [...statuses.entries()] : [],
       goal: goal ? `${goal.goalId}:${goal.status}:${goal.usage.tokensUsed}:${goal.usage.activeSeconds}:${goal.updatedAt}` : null,
-      cmux: cmux ? `${cmux.workspaceTitle}:${cmux.workspaceRef}:${cmux.surfaceRef}` : null,
+      cmux: cmux ? `${cmux.workspaceTitle}:${cmux.workspaceRef}:${cmux.surfaceRef}:${cmux.roleId}` : null,
       files: `${files.length}:${files[0]?.path ?? ""}`,
+      fileNav: this.filesNav.active() ? `${this.filesNav.cursorIndex()}:${this.filesNav.offsetIndex()}` : null,
       theme: theme?.name ?? null,
       goalMeter: this.goalMeter.get()?.toFixed(3) ?? null,
       ctxMeter: this.ctxMeter.get()?.toFixed(3) ?? null,

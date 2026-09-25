@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0
+
+> The FILES list can never squeeze MESSAGES again, the rail's files are navigable, and the session identity leads with the stable cmux role id.
+
+- **Three-message floor.** A long edit list (127 files took ~25 rows) could shrink MESSAGES to a single visible slot. Allocation now grants the message section three visible slots before FILES, crew cards, goal air, or the session id row may claim any spare row; FILES is capped at six entry rows idle (twelve while browsing) and reports what it hides with a `… N more` row, plus `… N above` once scrolled. At heights where the floor leaves no room for the FILES chrome the list is dropped whole instead of stealing message rows.
+- **Files navigation.** Focusing the rail and pressing `f` enters files mode: a hierarchical second level where `↑↓ PageUp PageDown Home End` move the cursor through the window, `↵`/`c` copy the selected file's path, and `Esc` returns to message navigation (a second `Esc` unfocuses). The FILES header reports `cursor/total`, the selected row carries a `▸` marker, and the hint strip swaps to `[↑↓] files [↵] copy path` / `[f] messages [Esc] back`.
+- **Stable cmux identity.** The session identity row now leads with the human-readable role bound to this surface's UUID in the cmux-role registry (`eugeny-engine · EUGENY - 28B & Training`); the dynamic `surface:N` ref, which renumbers on every crash, is only the fallback. The context reads the durable `CMUX_SURFACE_ID`/`CMUX_PANEL_ID` env (no subprocess) and reverse-looks-up the registry at `~/.pi/agent/state/cmux-roles.json` (overridable via `CMUX_ROLES_REGISTRY`), re-reading every 15s so a role bound mid-session appears without a restart.
+
 ## 2.1.1
 
 > Rail and footer are strict alternatives: the footer-mode decision now reads the terminal width, not the render width.

@@ -69,11 +69,26 @@ function fileBadge(palette: Palette, letter: string | null): string {
   }
 }
 
+/** The FILES window the component resolved: pure display data. */
+export type FileWindow = {
+  /** First file index rendered. */
+  start: number;
+  /** One past the last file index rendered. */
+  end: number;
+  /** Selected file index while the rail is in files mode, else null. */
+  cursor: number | null;
+  /** Files hidden above and below the window. */
+  hiddenAbove: number;
+  hiddenBelow: number;
+};
+
 /**
  * Session identity plus the write footprint in one quiet block: a blank
  * separator row, a ghost header carrying the branch, the surface and
  * workspace, the cwd, then an optional session id row and a FILES subsection
  * whose rows carry the git letter convention in front of front-trimmed paths.
+ * The identity leads with the stable role id when one is bound; the dynamic
+ * surface ref is only the fallback, because refs renumber on every crash.
  */
 export function renderSessionSection(
   ctx: ExtensionContext,
@@ -83,6 +98,7 @@ export function renderSessionSection(
   palette: Palette,
   files: FileEdit[],
   statusFor: (path: string) => string | null,
+  fileWindow: FileWindow | null = null,
   width = RAIL_CONTENT,
 ): string[] {
   if (rows <= 0) return [];
@@ -94,10 +110,12 @@ export function renderSessionSection(
   const branch = footerData?.getGitBranch() ?? null;
   push(ghostHeader(palette, "SESSION", bg, branch ? clip(branch, width - 12) : "", width));
 
-  const surface = cmux?.surfaceRef ?? "surface n/a";
+  const surface = cmux?.roleId ?? cmux?.surfaceRef ?? "surface n/a";
   const workspace = cmux?.workspaceTitle ?? cmux?.workspaceRef ?? "";
+  // A stable role id gets more room than a ref: it is the identity line.
+  const identityBudget = cmux?.roleId ? 16 : 12;
   const identityRow = workspace
-    ? `${palette.accent}${clip(surface, 12)}${RST} ${palette.ghost}·${RST} ${palette.textMid}${clip(workspace, Math.max(1, width - 16))}${RST}`
+    ? `${palette.accent}${clip(surface, identityBudget)}${RST} ${palette.ghost}·${RST} ${palette.textMid}${clip(workspace, Math.max(1, width - identityBudget - 4))}${RST}`
     : `${palette.accent}${clip(surface, width)}${RST}`;
   push(railRow(palette, identityRow, bg, width));
   push(railRow(palette, `${palette.textMid}${ellipsizePath(formatCwd(ctx.sessionManager.getCwd()), width)}${RST}`, bg, width));
@@ -108,14 +126,26 @@ export function renderSessionSection(
   // The FILES subsection needs its air, header, plus at least one file row.
   if (files.length > 0 && rows - lines.length >= 3) {
     const noun = files.length === 1 ? "file" : "files";
+    const window = fileWindow ?? { start: 0, end: files.length, cursor: null, hiddenAbove: 0, hiddenBelow: 0 };
+    const right = window.cursor !== null
+      ? `${window.cursor + 1}/${files.length} ${noun}`
+      : `${files.length} ${noun}`;
     push(railRow(palette, "", bg, width));
-    push(ghostHeader(palette, "FILES", bg, `${files.length} ${noun}`, width));
-    for (const file of files) {
+    push(ghostHeader(palette, "FILES", bg, right, width));
+    if (window.hiddenAbove > 0) {
+      push(railRow(palette, `${palette.ghost}… ${window.hiddenAbove} above${RST}`, bg, width));
+    }
+    for (let index = window.start; index < window.end; index++) {
       if (lines.length >= rows) break;
+      const file = files[index]!;
       const badge = fileBadge(palette, statusFor(file.path));
       const repeats = file.edits > 1 ? `${palette.ghost} ×${file.edits}${RST}` : "";
-      const pathBudget = width - 2 - visibleWidth(repeats);
-      push(railRow(palette, `${badge} ${palette.textMid}${ellipsizePath(file.path, Math.max(1, pathBudget))}${RST}${repeats}`, bg, width));
+      const marker = index === window.cursor ? `${palette.accent}▸${RST}` : " ";
+      const pathBudget = width - 3 - visibleWidth(repeats);
+      push(railRow(palette, `${marker}${badge} ${palette.textMid}${ellipsizePath(file.path, Math.max(1, pathBudget))}${RST}${repeats}`, bg, width));
+    }
+    if (window.hiddenBelow > 0 && lines.length < rows) {
+      push(railRow(palette, `${palette.ghost}… ${window.hiddenBelow} more${RST}`, bg, width));
     }
   }
   while (lines.length < rows) push(railRow(palette, "", bg, width));
